@@ -142,6 +142,13 @@ button:disabled {
   border-bottom: 1px solid rgba(24, 32, 38, 0.08);
 }
 
+.item-list li.item-active {
+  margin: 0 -0.5rem;
+  padding: 0.9rem 0.5rem;
+  border-radius: 16px;
+  background: rgba(31, 111, 120, 0.08);
+}
+
 .key-values div:last-child,
 .item-list li:last-child {
   border-bottom: 0;

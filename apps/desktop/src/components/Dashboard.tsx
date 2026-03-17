@@ -162,10 +162,16 @@ export function Dashboard({ bootstrap }: DashboardProps) {
 
         <article className="panel">
           <h2>项目列表</h2>
+          <p className="feedback-text">
+            当前项目：{currentProject ? `${currentProject.name} / ${currentProject.rootPath}` : "未选择"}
+          </p>
           <ul className="item-list">
             {bootstrap.projects.length === 0 ? <li>暂无项目</li> : null}
             {bootstrap.projects.map((project) => (
-              <li key={project.projectId}>
+              <li
+                key={project.projectId}
+                className={project.projectId === currentProject?.projectId ? "item-active" : undefined}
+              >
                 <strong>{project.name}</strong>
                 <span>{project.rootPath}</span>
                 <div className="button-row">
@@ -173,7 +179,7 @@ export function Dashboard({ bootstrap }: DashboardProps) {
                     className="secondary"
                     onClick={() => openProjectMutation.mutate({ projectId: project.projectId })}
                   >
-                    打开项目
+                    {project.projectId === currentProject?.projectId ? "当前项目" : "打开项目"}
                   </button>
                   <button
                     className="secondary"
