@@ -396,7 +396,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{JobStatus, get_job, list_jobs, run_job};
-    use crate::config::AppConfig;
+    use crate::config::{AppConfig, ModelSettings};
     use crate::db::initialize_database;
     use crate::services::block::list_blocks;
     use crate::services::chunk::get_source_preview;
@@ -434,6 +434,13 @@ mod tests {
             projects_dir: projects_dir.clone(),
             database_path: database_path.clone(),
             parser_worker_path,
+            model_settings: ModelSettings {
+                provider: "mock".to_string(),
+                api_base_url: "http://localhost/mock".to_string(),
+                api_key: "mock-key".to_string(),
+                default_model: "mock-explain-001".to_string(),
+                tool_model: "mock-explain-001".to_string(),
+            },
         };
 
         let project = create_project_record(&connection, &projects_dir, "测试项目", None)

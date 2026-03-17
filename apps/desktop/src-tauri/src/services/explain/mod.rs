@@ -3,12 +3,10 @@ use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::ai::model_adapter::{MockModelAdapter, ModelAdapter, ModelRequest};
+use crate::ai::model_adapter::{ModelAdapter, ModelRequest};
 use crate::services::block::get_block;
 
 pub const EXPLAIN_PROMPT_VERSION: &str = "explain.v1";
-pub const DEFAULT_EXPLAIN_PROVIDER: &str = "mock";
-pub const DEFAULT_EXPLAIN_MODEL: &str = "mock-explain-001";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -78,16 +76,38 @@ pub fn explain_block(
     connection: &Connection,
     block_id: &str,
     mode: &str,
+    model_adapter: &dyn ModelAdapter,
+    provider: &str,
+    model_name: &str,
 ) -> Result<BlockExplanationRecord, String> {
-    explain_block_with_options(connection, block_id, mode, false)
+    explain_block_with_options(
+        connection,
+        block_id,
+        mode,
+        false,
+        model_adapter,
+        provider,
+        model_name,
+    )
 }
 
 pub fn regenerate_block_explanation(
     connection: &Connection,
     block_id: &str,
     mode: &str,
+    model_adapter: &dyn ModelAdapter,
+    provider: &str,
+    model_name: &str,
 ) -> Result<BlockExplanationRecord, String> {
-    explain_block_with_options(connection, block_id, mode, true)
+    explain_block_with_options(
+        connection,
+        block_id,
+        mode,
+        true,
+        model_adapter,
+        provider,
+        model_name,
+    )
 }
 
 fn explain_block_with_options(
@@ -95,6 +115,9 @@ fn explain_block_with_options(
     block_id: &str,
     mode: &str,
     force_refresh: bool,
+    model_adapter: &dyn ModelAdapter,
+    provider: &str,
+    model_name: &str,
 ) -> Result<BlockExplanationRecord, String> {
     let block = get_block(connection, block_id)
         .map_err(|error| error.to_string())?
@@ -105,7 +128,7 @@ fn explain_block_with_options(
     let cache_key = build_cache_key(
         block_id,
         mode,
-        DEFAULT_EXPLAIN_MODEL,
+        model_name,
         EXPLAIN_PROMPT_VERSION,
     );
     if !force_refresh {
@@ -127,11 +150,10 @@ fn explain_block_with_options(
         .replace("{{content_md}}", &block.content_md)
         .replace("{{block_id}}", &block.block_id);
 
-    let adapter = MockModelAdapter;
-    let response = adapter.complete(&ModelRequest {
+    let response = model_adapter.complete(&ModelRequest {
         task_type: "block.explain".to_string(),
-        provider: DEFAULT_EXPLAIN_PROVIDER.to_string(),
-        model: DEFAULT_EXPLAIN_MODEL.to_string(),
+        provider: provider.to_string(),
+        model: model_name.to_string(),
         prompt,
         context_blocks: vec![block.content_md.clone()],
         metadata_json: serde_json::json!({
@@ -434,9 +456,11 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        EXPLAIN_PROMPT_VERSION, explain_block, list_explain_templates,
+        EXPLAIN_PROMPT_VERSION, ExplainKeyConcept, ExplainRelatedCandidate, ExplainResult,
+        explain_block, list_explain_templates,
         regenerate_block_explanation, seed_default_explain_templates,
     };
+    use crate::ai::model_adapter::{ModelAdapter, ModelRequest, ModelResponse};
     use crate::db::initialize_database;
     use crate::services::block::BlockRecord;
     use crate::services::chunk::DraftBlock;
@@ -515,13 +539,63 @@ mod tests {
         )
         .expect("写入 blocks 失败");
 
-        let explanation =
-            explain_block(&connection, &blocks[0].block_id, "default").expect("生成 explain 失败");
+        let adapter = TestModelAdapter;
+        let explanation = explain_block(
+            &connection,
+            &blocks[0].block_id,
+            "default",
+            &adapter,
+            "mock",
+            "mock-explain-001",
+        )
+        .expect("生成 explain 失败");
         assert_eq!(explanation.mode, "default");
         assert!(!explanation.summary.is_empty());
-        let regenerated = regenerate_block_explanation(&connection, &blocks[0].block_id, "default")
-            .expect("重算 explain 失败");
+        let regenerated = regenerate_block_explanation(
+            &connection,
+            &blocks[0].block_id,
+            "default",
+            &adapter,
+            "mock",
+            "mock-explain-001",
+        )
+        .expect("重算 explain 失败");
         assert_ne!(regenerated.explanation_id, explanation.explanation_id);
+    }
+
+    struct TestModelAdapter;
+
+    impl ModelAdapter for TestModelAdapter {
+        fn complete(&self, request: &ModelRequest) -> Result<ModelResponse, String> {
+            let payload = ExplainResult {
+                summary: format!("测试 explain：{}", request.task_type),
+                key_concepts: vec![ExplainKeyConcept {
+                    term: "测试概念".to_string(),
+                    explanation: "由测试模型返回".to_string(),
+                }],
+                role_in_document: "测试角色".to_string(),
+                prerequisites: vec!["测试前置".to_string()],
+                pitfalls: vec!["测试陷阱".to_string()],
+                examples: vec!["测试示例".to_string()],
+                related_candidates: vec![ExplainRelatedCandidate {
+                    label: "测试节点".to_string(),
+                    relation_hint: "related".to_string(),
+                    confidence: 0.7,
+                }],
+                mode: "default".to_string(),
+                prompt_version: EXPLAIN_PROMPT_VERSION.to_string(),
+            };
+            Ok(ModelResponse {
+                provider: "mock".to_string(),
+                model: "mock-explain-001".to_string(),
+                output_text: serde_json::to_string(&payload).map_err(|error| error.to_string())?,
+                input_tokens: 10,
+                output_tokens: 20,
+                total_tokens: 30,
+                duration_ms: 1,
+                cache_hit: false,
+            })
+        }
     }
 
     #[allow(dead_code)]

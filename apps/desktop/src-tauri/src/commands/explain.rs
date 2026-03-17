@@ -2,6 +2,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::ai::model_adapter::build_model_adapter;
 use crate::services::explain::{
     BlockExplanationRecord, ExplainTemplateRecord, explain_block, list_block_explanations,
     list_explain_templates, regenerate_block_explanation,
@@ -45,10 +46,14 @@ pub fn explain_block_command(
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<ExplainBlockResponse, String> {
     let app_state = state.lock().map_err(|error| error.to_string())?;
+    let adapter = build_model_adapter(&app_state.config.model_settings)?;
     let explanation = explain_block(
         &app_state.db,
         &payload.block_id,
         payload.mode.as_deref().unwrap_or("default"),
+        adapter.as_ref(),
+        &app_state.config.model_settings.provider,
+        &app_state.config.model_settings.tool_model,
     )?;
     Ok(ExplainBlockResponse { explanation })
 }
@@ -59,10 +64,14 @@ pub fn regenerate_block_explanation_command(
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<ExplainBlockResponse, String> {
     let app_state = state.lock().map_err(|error| error.to_string())?;
+    let adapter = build_model_adapter(&app_state.config.model_settings)?;
     let explanation = regenerate_block_explanation(
         &app_state.db,
         &payload.block_id,
         payload.mode.as_deref().unwrap_or("default"),
+        adapter.as_ref(),
+        &app_state.config.model_settings.provider,
+        &app_state.config.model_settings.tool_model,
     )?;
     Ok(ExplainBlockResponse { explanation })
 }
