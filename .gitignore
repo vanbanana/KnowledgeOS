@@ -11,3 +11,5 @@ apps/desktop/src-tauri/app.db
 apps/desktop/src-tauri/logs/
 coverage/
 .runlogs/
+.knowledgeos/
+apps/desktop/src-tauri/.knowledgeos/
