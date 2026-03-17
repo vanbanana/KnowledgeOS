@@ -1,0 +1,13 @@
+node_modules/
+dist/
+target/
+.turbo/
+.venv/
+__pycache__/
+*.pyc
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/app.db
+apps/desktop/src-tauri/logs/
+coverage/
+

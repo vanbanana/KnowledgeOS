@@ -1,0 +1,148 @@
+:root {
+  color-scheme: light;
+  font-family: "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(255, 214, 153, 0.9), transparent 30%),
+    linear-gradient(135deg, #f7f1e3 0%, #f2efe8 45%, #d8e2dc 100%);
+  color: #182026;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.8rem 1.2rem;
+  background: #1f6f78;
+  color: white;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+button.secondary {
+  background: rgba(24, 32, 38, 0.1);
+  color: #182026;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.screen-state {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 2rem;
+}
+
+.app-shell {
+  display: grid;
+  gap: 1.5rem;
+  padding: 2rem;
+}
+
+.hero-card,
+.panel {
+  border: 1px solid rgba(24, 32, 38, 0.08);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 16px 40px rgba(24, 32, 38, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.hero-card {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 2rem;
+}
+
+.eyebrow {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #1f6f78;
+}
+
+.hero-card h1 {
+  margin: 0;
+  font-size: clamp(2rem, 3vw, 3.2rem);
+}
+
+.hero-copy {
+  max-width: 50rem;
+  line-height: 1.6;
+}
+
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1rem;
+}
+
+.panel {
+  padding: 1.25rem;
+}
+
+.panel h2 {
+  margin-top: 0;
+}
+
+.key-values,
+.item-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.key-values div,
+.item-list li {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid rgba(24, 32, 38, 0.08);
+}
+
+.key-values div:last-child,
+.item-list li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.key-values dt {
+  font-size: 0.85rem;
+  color: rgba(24, 32, 38, 0.7);
+}
+
+.key-values dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.item-list strong,
+.item-list span {
+  word-break: break-all;
+}
+
+@media (max-width: 720px) {
+  .hero-card {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
