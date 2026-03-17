@@ -1,11 +1,10 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { BootstrapState } from "../state";
 import {
   cancelJob,
   createProject,
   deleteProject,
-  enqueueMockJob,
   importFiles,
   openProject,
   retryJob,
@@ -22,32 +21,34 @@ export function Dashboard({ bootstrap }: DashboardProps) {
   const [importPathsText, setImportPathsText] = useState("E:\\NOTE\\fixtures\\documents\\sample-note.md");
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(bootstrap.projects[0]?.projectId ?? null);
+
   const currentProject =
     bootstrap.projects.find((project) => project.projectId === selectedProjectId) ?? bootstrap.projects[0] ?? null;
   const visibleDocuments = currentProject
     ? bootstrap.documents.filter((document) => document.projectId === currentProject.projectId)
-    : bootstrap.documents;
+    : [];
+  const visibleBlocks = currentProject
+    ? bootstrap.blocks.filter((block) => block.projectId === currentProject.projectId)
+    : [];
+  const visibleJobs = useMemo(() => {
+    if (!currentProject) {
+      return bootstrap.jobs;
+    }
+    return bootstrap.jobs.filter((job) => job.payloadJson.includes(currentProject.projectId));
+  }, [bootstrap.jobs, currentProject]);
+
+  const readyDocumentCount = visibleDocuments.filter((document) =>
+    ["chunked", "indexed", "ready"].includes(document.parseStatus)
+  ).length;
 
   const createProjectMutation = useMutation({
     mutationFn: async () =>
       createProject({
         name: `项目 ${bootstrap.projects.length + 1}`,
-        description: "由桌面壳初始化页创建"
+        description: "KnowledgeOS 工作台项目"
       }),
     onSuccess: async (result) => {
       setSelectedProjectId(result.project.projectId);
-      await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
-    }
-  });
-
-  const enqueueJobMutation = useMutation({
-    mutationFn: async () =>
-      enqueueMockJob({
-        kind: "mock.bootstrap",
-        payload: { source: "dashboard" },
-        maxAttempts: 3
-      }),
-    onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
     }
   });
@@ -69,9 +70,9 @@ export function Dashboard({ bootstrap }: DashboardProps) {
       });
     },
     onSuccess: async (result) => {
-      const importedCount = result.documents.length;
-      const errorCount = result.errors.length;
-      setImportFeedback(`已导入 ${importedCount} 个文档，失败 ${errorCount} 个，已排入 ${result.queuedJobIds.length} 个解析任务。`);
+      setImportFeedback(
+        `已导入 ${result.documents.length} 个文档，失败 ${result.errors.length} 个，已排入 ${result.queuedJobIds.length} 个任务。`
+      );
       await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
     },
     onError: (error: Error) => {
@@ -120,173 +121,192 @@ export function Dashboard({ bootstrap }: DashboardProps) {
 
   return (
     <main className="app-shell">
-      <section className="hero-card">
-        <div>
-          <p className="eyebrow">KnowledgeOS</p>
-          <h1>桌面壳与数据底座</h1>
-          <p className="hero-copy">
-            当前阶段已切换到 Tauri + React + TypeScript + Rust + SQLite 架构，不使用 Electron。
-          </p>
-        </div>
-        <div className="button-row">
-          <button onClick={() => createProjectMutation.mutate()} disabled={createProjectMutation.isPending}>
-            创建示例项目
-          </button>
-          <button
-            className="secondary"
-            onClick={() => enqueueJobMutation.mutate()}
-            disabled={enqueueJobMutation.isPending}
-          >
-            创建 Mock Job
-          </button>
-        </div>
-      </section>
+      <section className="workspace-frame">
+        <aside className="workspace-rail">
+          <div className="brand-badge">K</div>
+          <button className="rail-button rail-button-active">工作台</button>
+          <button className="rail-button">项目</button>
+          <button className="rail-button">阅读器</button>
+          <button className="rail-button">图谱</button>
+          <button className="rail-button">卡片</button>
+          <button className="rail-button">Agent</button>
+        </aside>
 
-      <section className="info-grid">
-        <article className="panel">
-          <h2>应用信息</h2>
-          <dl className="key-values">
+        <aside className="workspace-sidebar">
+          <header className="sidebar-header">
             <div>
-              <dt>应用名</dt>
-              <dd>{bootstrap.appName}</dd>
+              <p className="section-kicker">KnowledgeOS</p>
+              <h1>学习知识工作台</h1>
             </div>
-            <div>
-              <dt>数据目录</dt>
-              <dd>{bootstrap.dataDir}</dd>
-            </div>
-            <div>
-              <dt>日志目录</dt>
-              <dd>{bootstrap.logDir}</dd>
-            </div>
-          </dl>
-        </article>
+            <button onClick={() => createProjectMutation.mutate()} disabled={createProjectMutation.isPending}>
+              新建项目
+            </button>
+          </header>
 
-        <article className="panel">
-          <h2>项目列表</h2>
-          <p className="feedback-text">
-            当前项目：{currentProject ? `${currentProject.name} / ${currentProject.rootPath}` : "未选择"}
-          </p>
-          <ul className="item-list">
-            {bootstrap.projects.length === 0 ? <li>暂无项目</li> : null}
-            {bootstrap.projects.map((project) => (
-              <li
-                key={project.projectId}
-                className={project.projectId === currentProject?.projectId ? "item-active" : undefined}
-              >
-                <strong>{project.name}</strong>
-                <span>{project.rootPath}</span>
-                <div className="button-row">
+          <section className="sidebar-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="section-kicker">Projects</p>
+                <h2>项目空间</h2>
+              </div>
+              <span>{bootstrap.projects.length} 个项目</span>
+            </div>
+            <div className="project-stack">
+              {bootstrap.projects.length === 0 ? <p className="muted-copy">还没有项目，先创建一个工作空间。</p> : null}
+              {bootstrap.projects.map((project) => (
+                <article
+                  key={project.projectId}
+                  className={project.projectId === currentProject?.projectId ? "project-card project-card-active" : "project-card"}
+                >
                   <button
-                    className="secondary"
+                    className="project-card-main"
                     onClick={() => openProjectMutation.mutate({ projectId: project.projectId })}
                   >
-                    {project.projectId === currentProject?.projectId ? "当前项目" : "打开项目"}
+                    <strong>{project.name}</strong>
+                    <span>{project.description ?? "本地优先知识项目"}</span>
+                    <small>{project.rootPath}</small>
                   </button>
-                  <button
-                    className="secondary"
-                    onClick={() =>
-                      deleteProjectMutation.mutate({
-                        projectId: project.projectId,
-                        deleteFiles: true
-                      })
-                    }
-                  >
-                    删除项目
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </article>
+                  <div className="project-card-actions">
+                    <button
+                      className="secondary"
+                      onClick={() =>
+                        deleteProjectMutation.mutate({
+                          projectId: project.projectId,
+                          deleteFiles: true
+                        })
+                      }
+                    >
+                      删除
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
 
-        <article className="panel">
-          <h2>导入流程</h2>
-          <p className="panel-copy">
-            当前已打通导入、标准化、切块与阅读器基础链路。导入成功的文档会写入 `source` 目录，进入
-            `parsing` 状态，并排入 `document.parse` 与后续 `document.chunk` 任务。
-          </p>
-          <textarea
-            className="path-input"
-            value={importPathsText}
-            onChange={(event) => setImportPathsText(event.target.value)}
-            rows={4}
-          />
-          <div className="button-row">
-            <button onClick={() => importFilesMutation.mutate()} disabled={importFilesMutation.isPending || !currentProject}>
-              导入文档
-            </button>
-          </div>
-          <p className="feedback-text">{importFeedback ?? (currentProject ? "可输入一个或多个绝对路径，每行一个。" : "请先创建项目。")}</p>
-        </article>
-
-        <article className="panel">
-          <h2>任务队列</h2>
-          <ul className="item-list">
-            {bootstrap.jobs.length === 0 ? <li>暂无任务</li> : null}
-            {bootstrap.jobs.map((job) => (
-              <li key={job.jobId}>
-                <strong>{job.kind}</strong>
-                <span>
-                  {job.status} / {job.attempts} / {job.maxAttempts}
-                </span>
-                <div className="button-row">
-                  <button
-                    className="secondary"
-                    disabled={job.status !== "pending" || runJobMutation.isPending}
-                    onClick={() => runJobMutation.mutate({ jobId: job.jobId })}
-                  >
-                    运行
-                  </button>
-                  <button
-                    className="secondary"
-                    disabled={job.status !== "failed" || retryJobMutation.isPending}
-                    onClick={() => retryJobMutation.mutate({ jobId: job.jobId })}
-                  >
-                    重试
-                  </button>
-                  <button
-                    className="secondary"
-                    disabled={job.status === "succeeded" || job.status === "cancelled" || cancelJobMutation.isPending}
-                    onClick={() => cancelJobMutation.mutate({ jobId: job.jobId })}
-                  >
-                    取消
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </article>
-
-        <article className="panel panel-wide">
-          <h2>文档状态</h2>
-          <ul className="item-list">
-            {visibleDocuments.length === 0 ? <li>当前项目暂无文档</li> : null}
-            {visibleDocuments.map((document) => (
-              <li key={document.documentId}>
-                <strong>{document.title ?? document.sourcePath}</strong>
-                <span>
-                  {document.sourceType} / {document.parseStatus}
-                </span>
-                <span>{document.sourcePath}</span>
-                {document.lastErrorMessage ? <span>错误：{document.lastErrorMessage}</span> : null}
-              </li>
-            ))}
-          </ul>
-        </article>
-
-        <article className="panel panel-wide">
-          <h2>Block 阅读器</h2>
-          {currentProject ? (
-            <ReaderWorkspace
-              projectId={currentProject.projectId}
-              documents={bootstrap.documents}
-              bootstrapBlocks={bootstrap.blocks}
-              readerStates={bootstrap.readerStates}
+          <section className="sidebar-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="section-kicker">Import</p>
+                <h2>资料导入</h2>
+              </div>
+            </div>
+            <textarea
+              className="path-input"
+              value={importPathsText}
+              onChange={(event) => setImportPathsText(event.target.value)}
+              rows={4}
             />
-          ) : (
-            <p className="feedback-text">请先创建并打开一个项目。</p>
-          )}
-        </article>
+            <div className="button-row">
+              <button onClick={() => importFilesMutation.mutate()} disabled={importFilesMutation.isPending || !currentProject}>
+                导入到当前项目
+              </button>
+            </div>
+            <p className="muted-copy">
+              {importFeedback ?? "每行一个绝对路径。导入后会自动进入解析与切块任务队列。"}
+            </p>
+          </section>
+
+          <section className="sidebar-panel">
+            <div className="panel-heading">
+              <div>
+                <p className="section-kicker">Queue</p>
+                <h2>任务队列</h2>
+              </div>
+            </div>
+            <div className="job-stack">
+              {visibleJobs.length === 0 ? <p className="muted-copy">当前项目暂无任务。</p> : null}
+              {visibleJobs.map((job) => (
+                <article key={job.jobId} className="job-card">
+                  <div>
+                    <strong>{job.kind}</strong>
+                    <p>{job.status} / {job.attempts} / {job.maxAttempts}</p>
+                  </div>
+                  <div className="button-row">
+                    <button
+                      className="secondary"
+                      disabled={job.status !== "pending" || runJobMutation.isPending}
+                      onClick={() => runJobMutation.mutate({ jobId: job.jobId })}
+                    >
+                      运行
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={job.status !== "failed" || retryJobMutation.isPending}
+                      onClick={() => retryJobMutation.mutate({ jobId: job.jobId })}
+                    >
+                      重试
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={job.status === "succeeded" || job.status === "cancelled" || cancelJobMutation.isPending}
+                      onClick={() => cancelJobMutation.mutate({ jobId: job.jobId })}
+                    >
+                      取消
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        </aside>
+
+        <section className="workspace-main">
+          <header className="workspace-topbar">
+            <div>
+              <p className="section-kicker">Workspace</p>
+              <h2>{currentProject?.name ?? "请选择项目"}</h2>
+              <p className="muted-copy">
+                {currentProject
+                  ? `${currentProject.rootPath}`
+                  : "创建项目后即可开始导入资料、逐块阅读并沉淀知识卡片。"}
+              </p>
+            </div>
+            <div className="stats-row">
+              <article className="stat-card">
+                <span>文档</span>
+                <strong>{visibleDocuments.length}</strong>
+              </article>
+              <article className="stat-card">
+                <span>可阅读</span>
+                <strong>{readyDocumentCount}</strong>
+              </article>
+              <article className="stat-card">
+                <span>Blocks</span>
+                <strong>{visibleBlocks.length}</strong>
+              </article>
+            </div>
+          </header>
+
+          <section className="workspace-overview">
+            <article className="overview-panel">
+              <div className="panel-heading">
+                <div>
+                  <p className="section-kicker">Documents</p>
+                  <h3>资料走廊</h3>
+                </div>
+              </div>
+              <div className="document-grid">
+                {visibleDocuments.length === 0 ? <p className="muted-copy">导入资料后，这里会显示你的课程文档与阅读进度。</p> : null}
+                {visibleDocuments.map((document) => (
+                  <article key={document.documentId} className="document-card">
+                    <strong>{document.title ?? document.sourcePath}</strong>
+                    <span>{document.sourceType} / {document.parseStatus}</span>
+                    <small>{document.sourcePath}</small>
+                    {document.lastErrorMessage ? <em>错误：{document.lastErrorMessage}</em> : null}
+                  </article>
+                ))}
+              </div>
+            </article>
+          </section>
+
+          <ReaderWorkspace
+            projectId={currentProject?.projectId ?? ""}
+            documents={bootstrap.documents}
+            bootstrapBlocks={bootstrap.blocks}
+            readerStates={bootstrap.readerStates}
+          />
+        </section>
       </section>
     </main>
   );
