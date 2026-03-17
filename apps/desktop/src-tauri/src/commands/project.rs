@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::services::project::{
-    ProjectRecord, create_project_record, initialize_project_directories,
-    list_projects as query_projects,
+    ProjectRecord, create_project_record, delete_project as remove_project, get_project,
+    initialize_project_directories, list_projects as query_projects,
 };
 use crate::state::AppState;
 
@@ -13,6 +13,19 @@ use crate::state::AppState;
 pub struct CreateProjectPayload {
     pub name: String,
     pub description: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectLookupPayload {
+    pub project_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteProjectPayload {
+    pub project_id: String,
+    pub delete_files: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -26,6 +39,19 @@ pub struct CreateProjectResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ListProjectsResponse {
     pub projects: Vec<ProjectRecord>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenProjectResponse {
+    pub project: ProjectRecord,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteProjectResponse {
+    pub project_id: String,
+    pub deleted_files: bool,
 }
 
 #[tauri::command]
@@ -47,6 +73,36 @@ pub fn create_project(
     Ok(CreateProjectResponse {
         project,
         initialized_directories,
+    })
+}
+
+#[tauri::command]
+pub fn open_project(
+    payload: ProjectLookupPayload,
+    state: tauri::State<'_, Arc<Mutex<AppState>>>,
+) -> Result<OpenProjectResponse, String> {
+    let app_state = state.lock().map_err(|error| error.to_string())?;
+    let project = get_project(&app_state.db, &payload.project_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "项目不存在".to_string())?;
+    Ok(OpenProjectResponse { project })
+}
+
+#[tauri::command]
+pub fn delete_project(
+    payload: DeleteProjectPayload,
+    state: tauri::State<'_, Arc<Mutex<AppState>>>,
+) -> Result<DeleteProjectResponse, String> {
+    let app_state = state.lock().map_err(|error| error.to_string())?;
+    let deleted_files = payload.delete_files.unwrap_or(true);
+    let deleted = remove_project(&app_state.db, &payload.project_id, deleted_files)?;
+    if deleted.is_none() {
+        return Err("项目不存在".to_string());
+    }
+
+    Ok(DeleteProjectResponse {
+        project_id: payload.project_id,
+        deleted_files,
     })
 }
 

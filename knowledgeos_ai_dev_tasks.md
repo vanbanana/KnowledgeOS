@@ -429,7 +429,7 @@ Phase 0 基础工程
 - prompt_hint: 为导入与标准化设计一套可持久化的文档状态机。
 
 ### TASK-021 文档注册与去重
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-020]
@@ -446,7 +446,7 @@ Phase 0 基础工程
 - prompt_hint: 实现文档导入登记与基于 source_hash 的去重机制。
 
 ### TASK-022 设计 Python parser sidecar 通信协议
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-001, TASK-020]
@@ -465,7 +465,7 @@ Phase 0 基础工程
 - prompt_hint: 定义 Tauri/Rust 与 Python parser worker 的 JSON 协议和 sidecar 管理器。
 
 ### TASK-023 搭建 parser worker 基础骨架
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-022]
@@ -483,7 +483,7 @@ Phase 0 基础工程
 - prompt_hint: 实现一个可被 Tauri sidecar 调起的 Python parser worker。
 
 ### TASK-024 实现 Markdown / TXT 标准化
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-023]
@@ -499,7 +499,7 @@ Phase 0 基础工程
 - prompt_hint: 先实现 MD/TXT 的标准化，作为最小可用解析链路。
 
 ### TASK-025 实现 PDF 标准化 v1
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-023]
@@ -517,7 +517,7 @@ Phase 0 基础工程
 - prompt_hint: 实现文本型 PDF -> Markdown + manifest 的 MVP 解析器。
 
 ### TASK-026 实现 PPTX 标准化 v1
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-023]
@@ -533,7 +533,7 @@ Phase 0 基础工程
 - prompt_hint: 把 PPTX 每页转成 markdown section，并输出 slide_index anchor。
 
 ### TASK-027 实现 DOCX 标准化 v1
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-023]
@@ -549,7 +549,7 @@ Phase 0 基础工程
 - prompt_hint: 实现 DOCX 的基础结构抽取，输出可切块 markdown。
 
 ### TASK-028 标准化结果写盘与 manifest 管理
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-024, TASK-025, TASK-026, TASK-027]

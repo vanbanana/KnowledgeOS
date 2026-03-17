@@ -3,7 +3,9 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::jobs::{JobRecord, enqueue_job, list_jobs as query_jobs};
+use crate::jobs::{
+    JobRecord, cancel_job, enqueue_job, list_jobs as query_jobs, retry_job, run_job,
+};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -12,6 +14,12 @@ pub struct EnqueueMockJobPayload {
     pub kind: String,
     pub payload: Option<Value>,
     pub max_attempts: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobCommandPayload {
+    pub job_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -24,6 +32,12 @@ pub struct EnqueueMockJobResponse {
 #[serde(rename_all = "camelCase")]
 pub struct ListJobsResponse {
     pub jobs: Vec<JobRecord>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobCommandResponse {
+    pub job: JobRecord,
 }
 
 #[tauri::command]
@@ -55,4 +69,34 @@ pub fn list_jobs(
     let app_state = state.lock().map_err(|error| error.to_string())?;
     let jobs = query_jobs(&app_state.db).map_err(|error| error.to_string())?;
     Ok(ListJobsResponse { jobs })
+}
+
+#[tauri::command]
+pub fn run_job_command(
+    payload: JobCommandPayload,
+    state: tauri::State<'_, Arc<Mutex<AppState>>>,
+) -> Result<JobCommandResponse, String> {
+    let app_state = state.lock().map_err(|error| error.to_string())?;
+    let job = run_job(&app_state.db, &app_state.config, &payload.job_id)?;
+    Ok(JobCommandResponse { job })
+}
+
+#[tauri::command]
+pub fn retry_job_command(
+    payload: JobCommandPayload,
+    state: tauri::State<'_, Arc<Mutex<AppState>>>,
+) -> Result<JobCommandResponse, String> {
+    let app_state = state.lock().map_err(|error| error.to_string())?;
+    let job = retry_job(&app_state.db, &payload.job_id)?;
+    Ok(JobCommandResponse { job })
+}
+
+#[tauri::command]
+pub fn cancel_job_command(
+    payload: JobCommandPayload,
+    state: tauri::State<'_, Arc<Mutex<AppState>>>,
+) -> Result<JobCommandResponse, String> {
+    let app_state = state.lock().map_err(|error| error.to_string())?;
+    let job = cancel_job(&app_state.db, &payload.job_id)?;
+    Ok(JobCommandResponse { job })
 }

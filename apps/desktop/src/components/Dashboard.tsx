@@ -1,7 +1,16 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { BootstrapState } from "../state";
-import { createProject, enqueueMockJob, importFiles } from "../lib/commands/client";
+import {
+  cancelJob,
+  createProject,
+  deleteProject,
+  enqueueMockJob,
+  importFiles,
+  openProject,
+  retryJob,
+  runJob
+} from "../lib/commands/client";
 
 interface DashboardProps {
   bootstrap: BootstrapState;
@@ -11,9 +20,11 @@ export function Dashboard({ bootstrap }: DashboardProps) {
   const queryClient = useQueryClient();
   const [importPathsText, setImportPathsText] = useState("E:\\NOTE\\fixtures\\documents\\sample-note.md");
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
-  const firstProject = bootstrap.projects[0] ?? null;
-  const visibleDocuments = firstProject
-    ? bootstrap.documents.filter((document) => document.projectId === firstProject.projectId)
+  const [selectedProjectId, setSelectedProjectId] = useState<string | null>(bootstrap.projects[0]?.projectId ?? null);
+  const currentProject =
+    bootstrap.projects.find((project) => project.projectId === selectedProjectId) ?? bootstrap.projects[0] ?? null;
+  const visibleDocuments = currentProject
+    ? bootstrap.documents.filter((document) => document.projectId === currentProject.projectId)
     : bootstrap.documents;
 
   const createProjectMutation = useMutation({
@@ -22,7 +33,8 @@ export function Dashboard({ bootstrap }: DashboardProps) {
         name: `项目 ${bootstrap.projects.length + 1}`,
         description: "由桌面壳初始化页创建"
       }),
-    onSuccess: async () => {
+    onSuccess: async (result) => {
+      setSelectedProjectId(result.project.projectId);
       await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
     }
   });
@@ -41,7 +53,7 @@ export function Dashboard({ bootstrap }: DashboardProps) {
 
   const importFilesMutation = useMutation({
     mutationFn: async () => {
-      if (!firstProject) {
+      if (!currentProject) {
         throw new Error("请先创建项目再导入文档。");
       }
 
@@ -51,7 +63,7 @@ export function Dashboard({ bootstrap }: DashboardProps) {
         .filter(Boolean);
 
       return importFiles({
-        projectId: firstProject.projectId,
+        projectId: currentProject.projectId,
         paths
       });
     },
@@ -63,6 +75,45 @@ export function Dashboard({ bootstrap }: DashboardProps) {
     },
     onError: (error: Error) => {
       setImportFeedback(error.message);
+    }
+  });
+
+  const openProjectMutation = useMutation({
+    mutationFn: openProject,
+    onSuccess: async (result) => {
+      setSelectedProjectId(result.project.projectId);
+      await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
+    }
+  });
+
+  const deleteProjectMutation = useMutation({
+    mutationFn: deleteProject,
+    onSuccess: async (_, variables) => {
+      if (selectedProjectId === variables.projectId) {
+        setSelectedProjectId(null);
+      }
+      await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
+    }
+  });
+
+  const runJobMutation = useMutation({
+    mutationFn: runJob,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
+    }
+  });
+
+  const retryJobMutation = useMutation({
+    mutationFn: retryJob,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
+    }
+  });
+
+  const cancelJobMutation = useMutation({
+    mutationFn: cancelJob,
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
     }
   });
 
@@ -117,6 +168,25 @@ export function Dashboard({ bootstrap }: DashboardProps) {
               <li key={project.projectId}>
                 <strong>{project.name}</strong>
                 <span>{project.rootPath}</span>
+                <div className="button-row">
+                  <button
+                    className="secondary"
+                    onClick={() => openProjectMutation.mutate({ projectId: project.projectId })}
+                  >
+                    打开项目
+                  </button>
+                  <button
+                    className="secondary"
+                    onClick={() =>
+                      deleteProjectMutation.mutate({
+                        projectId: project.projectId,
+                        deleteFiles: true
+                      })
+                    }
+                  >
+                    删除项目
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -134,11 +204,11 @@ export function Dashboard({ bootstrap }: DashboardProps) {
             rows={4}
           />
           <div className="button-row">
-            <button onClick={() => importFilesMutation.mutate()} disabled={importFilesMutation.isPending || !firstProject}>
+            <button onClick={() => importFilesMutation.mutate()} disabled={importFilesMutation.isPending || !currentProject}>
               导入文档
             </button>
           </div>
-          <p className="feedback-text">{importFeedback ?? (firstProject ? "可输入一个或多个绝对路径，每行一个。" : "请先创建项目。")}</p>
+          <p className="feedback-text">{importFeedback ?? (currentProject ? "可输入一个或多个绝对路径，每行一个。" : "请先创建项目。")}</p>
         </article>
 
         <article className="panel">
@@ -151,6 +221,29 @@ export function Dashboard({ bootstrap }: DashboardProps) {
                 <span>
                   {job.status} / {job.attempts} / {job.maxAttempts}
                 </span>
+                <div className="button-row">
+                  <button
+                    className="secondary"
+                    disabled={job.status !== "pending" || runJobMutation.isPending}
+                    onClick={() => runJobMutation.mutate({ jobId: job.jobId })}
+                  >
+                    运行
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={job.status !== "failed" || retryJobMutation.isPending}
+                    onClick={() => retryJobMutation.mutate({ jobId: job.jobId })}
+                  >
+                    重试
+                  </button>
+                  <button
+                    className="secondary"
+                    disabled={job.status === "succeeded" || job.status === "cancelled" || cancelJobMutation.isPending}
+                    onClick={() => cancelJobMutation.mutate({ jobId: job.jobId })}
+                  >
+                    取消
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

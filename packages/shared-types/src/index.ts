@@ -18,7 +18,8 @@ export const documentStatusSchema = z.enum([
   "ready",
   "failed"
 ]);
-export const documentSourceTypeSchema = z.enum(["pdf", "pptx", "docx", "md", "txt"]);
+export const documentSourceTypeSchema = z.enum(["pdf", "pptx", "docx", "md", "txt", "unknown"]);
+export const parserJobStatusSchema = z.enum(["pending", "running", "succeeded", "failed", "cancelled"]);
 
 export const logLevelSchema = z.enum(["trace", "debug", "info", "warn", "error"]);
 
@@ -62,6 +63,24 @@ export const createProjectInputSchema = z.object({
 export const createProjectOutputSchema = z.object({
   project: projectSchema,
   initializedDirectories: z.array(z.string())
+});
+
+export const openProjectInputSchema = z.object({
+  projectId: z.string().min(1)
+});
+
+export const openProjectOutputSchema = z.object({
+  project: projectSchema
+});
+
+export const deleteProjectInputSchema = z.object({
+  projectId: z.string().min(1),
+  deleteFiles: z.boolean().default(true)
+});
+
+export const deleteProjectOutputSchema = z.object({
+  projectId: z.string(),
+  deletedFiles: z.boolean()
 });
 
 export const listProjectsOutputSchema = z.object({
@@ -114,6 +133,14 @@ export const listJobsOutputSchema = z.object({
   jobs: z.array(jobSchema)
 });
 
+export const runJobInputSchema = z.object({
+  jobId: z.string().min(1)
+});
+
+export const jobCommandOutputSchema = z.object({
+  job: jobSchema
+});
+
 export const parserHealthResponseSchema = z.object({
   ok: z.boolean(),
   version: z.string()
@@ -130,6 +157,15 @@ export const parserParseResponseSchema = z.object({
   manifest: z.object({
     title: z.string(),
     sourceType: z.string(),
+    sourcePath: z.string().optional(),
+    sections: z.array(
+      z.object({
+        heading: z.string().nullable(),
+        anchor: z.string(),
+        index: z.number().int().nonnegative()
+      })
+    ).default([]),
+    assets: z.array(z.string()).default([]),
     warnings: z.array(z.string())
   })
 });
@@ -137,11 +173,16 @@ export const parserParseResponseSchema = z.object({
 export const commandNameSchema = z.enum([
   "app.getBootstrap",
   "project.create",
+  "project.open",
+  "project.delete",
   "project.list",
   "document.importFiles",
   "document.list",
   "job.enqueueMock",
-  "job.list"
+  "job.list",
+  "job.run",
+  "job.retry",
+  "job.cancel"
 ]);
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
@@ -149,6 +190,10 @@ export type Project = z.infer<typeof projectSchema>;
 export type Document = z.infer<typeof documentSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectInputSchema>;
 export type CreateProjectOutput = z.infer<typeof createProjectOutputSchema>;
+export type OpenProjectInput = z.infer<typeof openProjectInputSchema>;
+export type OpenProjectOutput = z.infer<typeof openProjectOutputSchema>;
+export type DeleteProjectInput = z.infer<typeof deleteProjectInputSchema>;
+export type DeleteProjectOutput = z.infer<typeof deleteProjectOutputSchema>;
 export type ListProjectsOutput = z.infer<typeof listProjectsOutputSchema>;
 export type ListDocumentsOutput = z.infer<typeof listDocumentsOutputSchema>;
 export type ImportFilesInput = z.infer<typeof importFilesInputSchema>;
@@ -157,6 +202,8 @@ export type Job = z.infer<typeof jobSchema>;
 export type EnqueueJobInput = z.infer<typeof enqueueJobInputSchema>;
 export type EnqueueJobOutput = z.infer<typeof enqueueJobOutputSchema>;
 export type ListJobsOutput = z.infer<typeof listJobsOutputSchema>;
+export type RunJobInput = z.infer<typeof runJobInputSchema>;
+export type JobCommandOutput = z.infer<typeof jobCommandOutputSchema>;
 export type ParserHealthResponse = z.infer<typeof parserHealthResponseSchema>;
 export type ParserParseRequest = z.infer<typeof parserParseRequestSchema>;
 export type ParserParseResponse = z.infer<typeof parserParseResponseSchema>;
@@ -170,6 +217,14 @@ export const commandSchemas = {
   "project.list": {
     input: z.undefined(),
     output: listProjectsOutputSchema
+  },
+  "project.open": {
+    input: openProjectInputSchema,
+    output: openProjectOutputSchema
+  },
+  "project.delete": {
+    input: deleteProjectInputSchema,
+    output: deleteProjectOutputSchema
   },
   "document.importFiles": {
     input: importFilesInputSchema,
@@ -188,5 +243,17 @@ export const commandSchemas = {
   "job.list": {
     input: z.undefined(),
     output: listJobsOutputSchema
+  },
+  "job.run": {
+    input: runJobInputSchema,
+    output: jobCommandOutputSchema
+  },
+  "job.retry": {
+    input: runJobInputSchema,
+    output: jobCommandOutputSchema
+  },
+  "job.cancel": {
+    input: runJobInputSchema,
+    output: jobCommandOutputSchema
   }
 } as const;

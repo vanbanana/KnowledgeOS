@@ -3,12 +3,18 @@ import {
   appConfigSchema,
   createProjectInputSchema,
   createProjectOutputSchema,
+  deleteProjectInputSchema,
+  deleteProjectOutputSchema,
   importFilesInputSchema,
   importFilesOutputSchema,
   listDocumentsOutputSchema,
   enqueueJobInputSchema,
   enqueueJobOutputSchema,
+  jobCommandOutputSchema,
   listJobsOutputSchema,
+  openProjectInputSchema,
+  openProjectOutputSchema,
+  runJobInputSchema,
   listProjectsOutputSchema
 } from "@knowledgeos/shared-types";
 
@@ -31,6 +37,16 @@ export const desktopCommandSchemas = {
     command: "create_project",
     input: createProjectInputSchema,
     output: createProjectOutputSchema
+  },
+  projectOpen: {
+    command: "open_project",
+    input: openProjectInputSchema,
+    output: openProjectOutputSchema
+  },
+  projectDelete: {
+    command: "delete_project",
+    input: deleteProjectInputSchema,
+    output: deleteProjectOutputSchema
   },
   projectList: {
     command: "list_projects",
@@ -58,6 +74,21 @@ export const desktopCommandSchemas = {
     command: "list_jobs",
     input: z.undefined(),
     output: listJobsOutputSchema
+  },
+  jobRun: {
+    command: "run_job_command",
+    input: runJobInputSchema,
+    output: jobCommandOutputSchema
+  },
+  jobRetry: {
+    command: "retry_job_command",
+    input: runJobInputSchema,
+    output: jobCommandOutputSchema
+  },
+  jobCancel: {
+    command: "cancel_job_command",
+    input: runJobInputSchema,
+    output: jobCommandOutputSchema
   }
 } as const;
 

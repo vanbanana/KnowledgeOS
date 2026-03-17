@@ -1,3 +1,4 @@
+use std::fs;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -105,4 +106,34 @@ pub fn get_project(
     } else {
         Ok(None)
     }
+}
+
+pub fn delete_project(
+    connection: &Connection,
+    project_id: &str,
+    delete_files: bool,
+) -> Result<Option<ProjectRecord>, String> {
+    let project = get_project(connection, project_id).map_err(|error| error.to_string())?;
+    let Some(project) = project else {
+        return Ok(None);
+    };
+
+    connection
+        .execute("DELETE FROM projects WHERE project_id = ?1", [project_id])
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "DELETE FROM jobs WHERE payload_json LIKE ?1",
+            [format!("%\"projectId\":\"{project_id}\"%")],
+        )
+        .map_err(|error| error.to_string())?;
+
+    if delete_files {
+        let root = Path::new(&project.root_path);
+        if root.exists() {
+            fs::remove_dir_all(root).map_err(|error| error.to_string())?;
+        }
+    }
+
+    Ok(Some(project))
 }

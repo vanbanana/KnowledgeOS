@@ -2,7 +2,9 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createProjectInputSchema,
+  deleteProjectInputSchema,
   importFilesInputSchema,
+  openProjectInputSchema,
   enqueueJobInputSchema,
   parserParseResponseSchema
 } from "./index";
@@ -26,6 +28,11 @@ test("importFilesInputSchema 应接受导入参数", () => {
   assert.equal(parsed.paths.length, 1);
 });
 
+test("项目命令 schema 应接受 projectId", () => {
+  assert.equal(openProjectInputSchema.parse({ projectId: "project-1" }).projectId, "project-1");
+  assert.equal(deleteProjectInputSchema.parse({ projectId: "project-1" }).deleteFiles, true);
+});
+
 test("parserParseResponseSchema 应校验最小解析结果", () => {
   const parsed = parserParseResponseSchema.parse({
     ok: true,
@@ -33,6 +40,9 @@ test("parserParseResponseSchema 应校验最小解析结果", () => {
     manifest: {
       title: "标题",
       sourceType: "md",
+      sourcePath: "E:/NOTE/sample.md",
+      sections: [],
+      assets: [],
       warnings: []
     }
   });

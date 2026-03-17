@@ -17,7 +17,7 @@ export interface BootstrapState {
     documentId: string;
     projectId: string;
     sourcePath: string;
-    sourceType: "pdf" | "pptx" | "docx" | "md" | "txt";
+    sourceType: "pdf" | "pptx" | "docx" | "md" | "txt" | "unknown";
     sourceHash: string | null;
     normalizedMdPath: string | null;
     manifestPath: string | null;

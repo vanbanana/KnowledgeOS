@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from parsers import parse_docx, parse_md_txt, parse_pdf, parse_pptx
+
 VERSION = "0.1.0"
 
 
@@ -17,19 +19,16 @@ def parse_file(file_path: str, source_type: str) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"文件不存在: {file_path}")
 
-    content = path.read_text(encoding="utf-8", errors="ignore")
-    title = path.stem or "未命名文档"
-    markdown = content if source_type == "md" else f"# {title}\n\n{content}"
+    if source_type in {"md", "txt"}:
+        return parse_md_txt(path, source_type)
+    if source_type == "pdf":
+        return parse_pdf(path, source_type)
+    if source_type == "pptx":
+        return parse_pptx(path, source_type)
+    if source_type == "docx":
+        return parse_docx(path, source_type)
 
-    return {
-        "ok": True,
-        "markdown": markdown,
-        "manifest": {
-            "title": title,
-            "sourceType": source_type,
-            "warnings": [],
-        },
-    }
+    raise ValueError(f"暂不支持的 source_type: {source_type}")
 
 
 def main() -> None:

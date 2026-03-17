@@ -1,13 +1,19 @@
 import type {
   CreateProjectInput,
   CreateProjectOutput,
+  DeleteProjectInput,
+  DeleteProjectOutput,
   EnqueueJobInput,
   EnqueueJobOutput,
   ImportFilesInput,
   ImportFilesOutput,
+  JobCommandOutput,
   ListDocumentsOutput,
   ListJobsOutput,
-  ListProjectsOutput
+  ListProjectsOutput,
+  OpenProjectInput,
+  OpenProjectOutput,
+  RunJobInput
 } from "@knowledgeos/shared-types";
 import { invokeTyped } from "./invoke";
 import { desktopCommandSchemas, type BootstrapPayload } from "./schemas";
@@ -18,6 +24,14 @@ export async function getBootstrapPayload(): Promise<BootstrapPayload> {
 
 export async function createProject(input: CreateProjectInput): Promise<CreateProjectOutput> {
   return invokeTyped(desktopCommandSchemas.projectCreate, input);
+}
+
+export async function openProject(input: OpenProjectInput): Promise<OpenProjectOutput> {
+  return invokeTyped(desktopCommandSchemas.projectOpen, input);
+}
+
+export async function deleteProject(input: DeleteProjectInput): Promise<DeleteProjectOutput> {
+  return invokeTyped(desktopCommandSchemas.projectDelete, input);
 }
 
 export async function listProjects(): Promise<ListProjectsOutput> {
@@ -38,4 +52,16 @@ export async function enqueueMockJob(input: EnqueueJobInput): Promise<EnqueueJob
 
 export async function listJobs(): Promise<ListJobsOutput> {
   return invokeTyped(desktopCommandSchemas.jobList, undefined);
+}
+
+export async function runJob(input: RunJobInput): Promise<JobCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.jobRun, input);
+}
+
+export async function retryJob(input: RunJobInput): Promise<JobCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.jobRetry, input);
+}
+
+export async function cancelJob(input: RunJobInput): Promise<JobCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.jobCancel, input);
 }
