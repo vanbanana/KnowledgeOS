@@ -4,8 +4,8 @@
   "version": "0.1.0",
   "identifier": "com.knowledgeos.desktop",
   "build": {
-    "beforeDevCommand": "pnpm --dir .. dev",
-    "beforeBuildCommand": "pnpm --dir .. build",
+    "beforeDevCommand": "pnpm --dir ../.. dev",
+    "beforeBuildCommand": "pnpm --dir ../.. build",
     "devUrl": "http://localhost:1420",
     "frontendDist": "../dist"
   },
