@@ -1,4 +1,8 @@
 import type {
+  BlockCommandOutput,
+  GetSourcePreviewInput,
+  GetSourcePreviewOutput,
+  ListBlocksOutput,
   CreateProjectInput,
   CreateProjectOutput,
   DeleteProjectInput,
@@ -13,6 +17,7 @@ import type {
   ListProjectsOutput,
   OpenProjectInput,
   OpenProjectOutput,
+  ReaderStateCommandOutput,
   RunJobInput
 } from "@knowledgeos/shared-types";
 import { invokeTyped } from "./invoke";
@@ -44,6 +49,31 @@ export async function importFiles(input: ImportFilesInput): Promise<ImportFilesO
 
 export async function listDocuments(projectId: string): Promise<ListDocumentsOutput> {
   return invokeTyped(desktopCommandSchemas.documentList, { projectId });
+}
+
+export async function listBlocks(documentId: string): Promise<ListBlocksOutput> {
+  return invokeTyped(desktopCommandSchemas.blockList, { documentId });
+}
+
+export async function updateBlock(input: {
+  blockId: string;
+  isFavorite: boolean;
+  note?: string;
+}): Promise<BlockCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.blockUpdate, input);
+}
+
+export async function upsertReaderState(input: {
+  projectId: string;
+  documentId: string;
+  blockId: string;
+  sourceAnchor?: string;
+}): Promise<ReaderStateCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.readerStateUpsert, input);
+}
+
+export async function getSourcePreview(input: GetSourcePreviewInput): Promise<GetSourcePreviewOutput> {
+  return invokeTyped(desktopCommandSchemas.readerSourcePreview, input);
 }
 
 export async function enqueueMockJob(input: EnqueueJobInput): Promise<EnqueueJobOutput> {

@@ -35,6 +35,30 @@ pub struct NormalizeResult {
     pub manifest: NormalizedManifest,
 }
 
+pub fn read_normalized_result(
+    document: &crate::services::import::DocumentRecord,
+) -> Result<NormalizeResult, String> {
+    let markdown_path = document
+        .normalized_md_path
+        .clone()
+        .ok_or_else(|| "文档缺少 normalized markdown 路径".to_string())?;
+    let manifest_path = document
+        .manifest_path
+        .clone()
+        .ok_or_else(|| "文档缺少 manifest 路径".to_string())?;
+
+    let markdown = fs::read_to_string(markdown_path).map_err(|error| error.to_string())?;
+    let manifest_json = fs::read_to_string(manifest_path).map_err(|error| error.to_string())?;
+    let manifest = serde_json::from_str::<NormalizedManifest>(&manifest_json)
+        .map_err(|error| error.to_string())?;
+
+    Ok(NormalizeResult {
+        ok: true,
+        markdown,
+        manifest,
+    })
+}
+
 pub fn write_normalized_result(
     connection: &Connection,
     project_root: &Path,

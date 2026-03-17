@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::config::AppConfig;
+use crate::services::chunk::chunk_document;
 use crate::services::import::{DocumentStatus, get_document, transition_document_status};
 use crate::services::normalize::write_normalized_result;
 use crate::sidecar::parse_document;
@@ -49,8 +50,18 @@ pub struct JobRecord {
 #[serde(rename_all = "camelCase")]
 struct DocumentParsePayload {
     document_id: String,
+    project_id: Option<String>,
     project_root: String,
     source_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DocumentChunkPayload {
+    document_id: String,
+    #[allow(dead_code)]
+    project_id: Option<String>,
+    project_root: String,
 }
 
 pub fn enqueue_job(
@@ -194,6 +205,7 @@ pub fn run_job(
 fn execute_job(connection: &Connection, config: &AppConfig, job: &JobRecord) -> Result<(), String> {
     match job.kind.as_str() {
         "document.parse" => execute_document_parse_job(connection, config, &job.payload_json),
+        "document.chunk" => execute_document_chunk_job(connection, &job.payload_json),
         _ => Ok(()),
     }
 }
@@ -261,7 +273,50 @@ fn execute_document_parse_job(
         DocumentStatus::Normalized,
         None,
     )?;
+    enqueue_document_chunk_job(
+        connection,
+        &payload.document_id,
+        payload.project_id.as_deref(),
+        &payload.project_root,
+    )?;
     Ok(())
+}
+
+fn execute_document_chunk_job(connection: &Connection, payload_json: &str) -> Result<(), String> {
+    let payload: DocumentChunkPayload =
+        serde_json::from_str(payload_json).map_err(|error| error.to_string())?;
+    let project_root = PathBuf::from(&payload.project_root);
+
+    match chunk_document(connection, &project_root, &payload.document_id) {
+        Ok(_) => Ok(()),
+        Err(error) => {
+            let _ = transition_document_status(
+                connection,
+                &payload.document_id,
+                DocumentStatus::Normalized,
+                DocumentStatus::Failed,
+                Some(&error),
+            );
+            Err(error)
+        }
+    }
+}
+
+fn enqueue_document_chunk_job(
+    connection: &Connection,
+    document_id: &str,
+    project_id: Option<&str>,
+    project_root: &str,
+) -> Result<(), String> {
+    let payload_json = serde_json::json!({
+        "documentId": document_id,
+        "projectId": project_id,
+        "projectRoot": project_root
+    })
+    .to_string();
+    enqueue_job(connection, "document.chunk", &payload_json, 3)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn mark_job_running(connection: &Connection, job: &JobRecord) -> Result<(), String> {
@@ -340,14 +395,17 @@ mod tests {
 
     use uuid::Uuid;
 
-    use super::{JobStatus, get_job, run_job};
+    use super::{JobStatus, get_job, list_jobs, run_job};
     use crate::config::AppConfig;
     use crate::db::initialize_database;
+    use crate::services::block::list_blocks;
+    use crate::services::chunk::get_source_preview;
     use crate::services::import::{DocumentStatus, import_files, list_documents};
     use crate::services::project::{create_project_record, initialize_project_directories};
+    use crate::services::reader_state::upsert_reader_state;
 
     #[test]
-    fn 应可完成导入并运行解析任务() {
+    fn 应可完成导入并运行解析与切块任务() {
         let temp_root = std::env::temp_dir().join(format!("knowledgeos-test-{}", Uuid::new_v4()));
         fs::create_dir_all(&temp_root).expect("创建临时目录失败");
         let data_dir = temp_root.join(".knowledgeos").join("data");
@@ -418,5 +476,50 @@ mod tests {
             .expect("查询任务失败")
             .expect("任务应存在");
         assert_eq!(persisted_job.status, JobStatus::Succeeded.as_str());
+
+        let queued_jobs = list_jobs(&connection).expect("查询任务列表失败");
+        let chunk_job = queued_jobs
+            .iter()
+            .find(|item| {
+                item.kind == "document.chunk" && item.status == JobStatus::Pending.as_str()
+            })
+            .expect("应创建待执行的切块任务");
+        let chunk_result =
+            run_job(&connection, &config, &chunk_job.job_id).expect("运行切块任务失败");
+        assert_eq!(chunk_result.status, JobStatus::Succeeded.as_str());
+
+        let chunked_documents =
+            list_documents(&connection, &project.project_id).expect("查询文档失败");
+        assert_eq!(
+            chunked_documents[0].parse_status,
+            DocumentStatus::Chunked.to_string()
+        );
+
+        let blocks =
+            list_blocks(&connection, &chunked_documents[0].document_id).expect("查询 block 失败");
+        assert!(!blocks.is_empty());
+
+        let blocks_jsonl = PathBuf::from(&project.root_path)
+            .join("blocks")
+            .join(format!("{}.jsonl", chunked_documents[0].document_id));
+        assert!(blocks_jsonl.exists());
+
+        let preview = get_source_preview(
+            &connection,
+            &chunked_documents[0].document_id,
+            blocks[0].source_anchor.as_deref().unwrap_or(""),
+        )
+        .expect("读取原文预览失败");
+        assert!(!preview.excerpt_md.is_empty());
+
+        let reader_state = upsert_reader_state(
+            &connection,
+            &project.project_id,
+            &chunked_documents[0].document_id,
+            &blocks[0].block_id,
+            blocks[0].source_anchor.as_deref(),
+        )
+        .expect("写入阅读状态失败");
+        assert_eq!(reader_state.block_id, blocks[0].block_id);
     }
 }

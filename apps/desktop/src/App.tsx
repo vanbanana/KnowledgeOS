@@ -14,7 +14,7 @@ export function App() {
   }, [data, setBootstrap]);
 
   if (isLoading) {
-    return <main className="screen-state">正在初始化桌面壳与数据底座...</main>;
+    return <main className="screen-state">正在初始化桌面壳、切块引擎与阅读器...</main>;
   }
 
   if (error) {
@@ -27,4 +27,3 @@ export function App() {
 
   return <Dashboard bootstrap={data} />;
 }
-

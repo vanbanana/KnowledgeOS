@@ -11,6 +11,7 @@ import {
   retryJob,
   runJob
 } from "../lib/commands/client";
+import { ReaderWorkspace } from "./ReaderWorkspace";
 
 interface DashboardProps {
   bootstrap: BootstrapState;
@@ -201,7 +202,8 @@ export function Dashboard({ bootstrap }: DashboardProps) {
         <article className="panel">
           <h2>导入流程</h2>
           <p className="panel-copy">
-            `TASK-020` 当前提供导入状态机骨架。导入成功的文档会写入 `source` 目录，并进入 `parsing` 状态，同时排入 mock 解析任务。
+            当前已打通导入、标准化、切块与阅读器基础链路。导入成功的文档会写入 `source` 目录，进入
+            `parsing` 状态，并排入 `document.parse` 与后续 `document.chunk` 任务。
           </p>
           <textarea
             className="path-input"
@@ -270,6 +272,20 @@ export function Dashboard({ bootstrap }: DashboardProps) {
               </li>
             ))}
           </ul>
+        </article>
+
+        <article className="panel panel-wide">
+          <h2>Block 阅读器</h2>
+          {currentProject ? (
+            <ReaderWorkspace
+              projectId={currentProject.projectId}
+              documents={bootstrap.documents}
+              bootstrapBlocks={bootstrap.blocks}
+              readerStates={bootstrap.readerStates}
+            />
+          ) : (
+            <p className="feedback-text">请先创建并打开一个项目。</p>
+          )}
         </article>
       </section>
     </main>

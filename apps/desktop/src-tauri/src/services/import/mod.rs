@@ -55,6 +55,7 @@ impl DocumentStatus {
                 | (Self::Indexed, Self::Failed)
                 | (Self::Failed, Self::Imported)
                 | (Self::Failed, Self::Parsing)
+                | (Self::Failed, Self::Normalized)
         )
     }
 }

@@ -1,6 +1,10 @@
 import { z } from "zod";
 import {
   appConfigSchema,
+  blockCommandOutputSchema,
+  getSourcePreviewInputSchema,
+  getSourcePreviewOutputSchema,
+  listBlocksOutputSchema,
   createProjectInputSchema,
   createProjectOutputSchema,
   deleteProjectInputSchema,
@@ -14,8 +18,10 @@ import {
   listJobsOutputSchema,
   openProjectInputSchema,
   openProjectOutputSchema,
+  readerStateCommandOutputSchema,
   runJobInputSchema,
-  listProjectsOutputSchema
+  listProjectsOutputSchema,
+  upsertReaderStateInputSchema
 } from "@knowledgeos/shared-types";
 
 export const bootstrapPayloadSchema = z.object({
@@ -24,6 +30,8 @@ export const bootstrapPayloadSchema = z.object({
   logDir: appConfigSchema.shape.logDir,
   projects: listProjectsOutputSchema.shape.projects,
   documents: listDocumentsOutputSchema.shape.documents,
+  readerStates: z.array(readerStateCommandOutputSchema.shape.readerState),
+  blocks: listBlocksOutputSchema.shape.blocks,
   jobs: listJobsOutputSchema.shape.jobs
 });
 
@@ -64,6 +72,32 @@ export const desktopCommandSchemas = {
       projectId: z.string().min(1)
     }),
     output: listDocumentsOutputSchema
+  },
+  blockList: {
+    command: "list_blocks_command",
+    input: z.object({
+      documentId: z.string().min(1)
+    }),
+    output: listBlocksOutputSchema
+  },
+  blockUpdate: {
+    command: "update_block_command",
+    input: z.object({
+      blockId: z.string().min(1),
+      isFavorite: z.boolean(),
+      note: z.string().optional()
+    }),
+    output: blockCommandOutputSchema
+  },
+  readerStateUpsert: {
+    command: "upsert_reader_state_command",
+    input: upsertReaderStateInputSchema,
+    output: readerStateCommandOutputSchema
+  },
+  readerSourcePreview: {
+    command: "get_source_preview_command",
+    input: getSourcePreviewInputSchema,
+    output: getSourcePreviewOutputSchema
   },
   jobEnqueueMock: {
     command: "enqueue_mock_job",

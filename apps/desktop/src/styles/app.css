@@ -170,9 +170,134 @@ button:disabled {
   word-break: break-all;
 }
 
+.reader-shell {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(0, 1.4fr) minmax(260px, 1fr);
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.reader-column {
+  min-height: 28rem;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.7);
+  border: 1px solid rgba(24, 32, 38, 0.08);
+  padding: 1rem;
+}
+
+.reader-header h2,
+.inspector-card h3,
+.markdown-article h1,
+.markdown-article h2,
+.markdown-article h3 {
+  margin: 0 0 0.75rem;
+}
+
+.reader-header {
+  margin-bottom: 1rem;
+}
+
+.reader-meta {
+  margin: 0.35rem 0;
+  color: rgba(24, 32, 38, 0.74);
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.reader-documents,
+.reader-outline {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.reader-doc,
+.reader-outline-item {
+  width: 100%;
+  border-radius: 16px;
+  border: 1px solid rgba(24, 32, 38, 0.08);
+  background: rgba(255, 255, 255, 0.82);
+  color: #182026;
+  text-align: left;
+}
+
+.reader-doc {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.reader-doc-active,
+.reader-outline-item-active {
+  background: rgba(31, 111, 120, 0.12);
+  border-color: rgba(31, 111, 120, 0.25);
+}
+
+.reader-outline {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+
+.reader-outline-item {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.reader-empty {
+  display: grid;
+  place-items: center;
+  min-height: 18rem;
+  color: rgba(24, 32, 38, 0.68);
+  text-align: center;
+  line-height: 1.7;
+}
+
+.markdown-article {
+  line-height: 1.8;
+}
+
+.markdown-article p,
+.markdown-article ul {
+  margin: 0 0 1rem;
+}
+
+.markdown-article code {
+  padding: 0.1rem 0.35rem;
+  border-radius: 8px;
+  background: rgba(24, 32, 38, 0.08);
+  font-family: "Cascadia Code", "Microsoft YaHei UI", monospace;
+}
+
+.inspector-card {
+  padding: 1rem;
+  margin-bottom: 1rem;
+  border-radius: 16px;
+  background: rgba(247, 241, 227, 0.82);
+}
+
+.note-field {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.note-field textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(24, 32, 38, 0.12);
+  border-radius: 16px;
+  min-height: 8rem;
+  font: 0.95rem/1.6 "Microsoft YaHei UI", "Segoe UI", sans-serif;
+  background: rgba(255, 255, 255, 0.88);
+}
+
 @media (max-width: 720px) {
   .hero-card {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .reader-shell {
+    grid-template-columns: 1fr;
   }
 }

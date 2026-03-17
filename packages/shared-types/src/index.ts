@@ -20,6 +20,7 @@ export const documentStatusSchema = z.enum([
 ]);
 export const documentSourceTypeSchema = z.enum(["pdf", "pptx", "docx", "md", "txt", "unknown"]);
 export const parserJobStatusSchema = z.enum(["pending", "running", "succeeded", "failed", "cancelled"]);
+export const blockTypeSchema = z.enum(["section", "paragraph"]);
 
 export const logLevelSchema = z.enum(["trace", "debug", "info", "warn", "error"]);
 
@@ -53,6 +54,39 @@ export const documentSchema = z.object({
   importedAt: z.string(),
   updatedAt: z.string().nullable(),
   lastErrorMessage: z.string().nullable()
+});
+
+export const blockSchema = z.object({
+  blockId: z.string(),
+  projectId: z.string(),
+  documentId: z.string(),
+  blockType: blockTypeSchema,
+  title: z.string().nullable(),
+  headingPath: z.array(z.string()),
+  depth: z.number().int().nonnegative(),
+  orderIndex: z.number().int().nonnegative(),
+  contentMd: z.string(),
+  tokenCount: z.number().int().nonnegative(),
+  sourceAnchor: z.string().nullable(),
+  parentBlockId: z.string().nullable(),
+  isFavorite: z.boolean(),
+  note: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
+export const readerStateSchema = z.object({
+  projectId: z.string(),
+  documentId: z.string(),
+  blockId: z.string(),
+  sourceAnchor: z.string().nullable(),
+  updatedAt: z.string()
+});
+
+export const sourcePreviewSchema = z.object({
+  anchor: z.string(),
+  title: z.string().nullable(),
+  excerptMd: z.string()
 });
 
 export const createProjectInputSchema = z.object({
@@ -89,6 +123,10 @@ export const listProjectsOutputSchema = z.object({
 
 export const listDocumentsOutputSchema = z.object({
   documents: z.array(documentSchema)
+});
+
+export const listBlocksOutputSchema = z.object({
+  blocks: z.array(blockSchema)
 });
 
 export const importFilesInputSchema = z.object({
@@ -141,6 +179,30 @@ export const jobCommandOutputSchema = z.object({
   job: jobSchema
 });
 
+export const blockCommandOutputSchema = z.object({
+  block: blockSchema
+});
+
+export const upsertReaderStateInputSchema = z.object({
+  projectId: z.string().min(1),
+  documentId: z.string().min(1),
+  blockId: z.string().min(1),
+  sourceAnchor: z.string().optional()
+});
+
+export const readerStateCommandOutputSchema = z.object({
+  readerState: readerStateSchema
+});
+
+export const getSourcePreviewInputSchema = z.object({
+  documentId: z.string().min(1),
+  anchor: z.string().min(1)
+});
+
+export const getSourcePreviewOutputSchema = z.object({
+  preview: sourcePreviewSchema
+});
+
 export const parserHealthResponseSchema = z.object({
   ok: z.boolean(),
   version: z.string()
@@ -178,6 +240,10 @@ export const commandNameSchema = z.enum([
   "project.list",
   "document.importFiles",
   "document.list",
+  "block.list",
+  "block.update",
+  "reader.state.upsert",
+  "reader.sourcePreview",
   "job.enqueueMock",
   "job.list",
   "job.run",
@@ -188,6 +254,9 @@ export const commandNameSchema = z.enum([
 export type AppConfig = z.infer<typeof appConfigSchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type Document = z.infer<typeof documentSchema>;
+export type Block = z.infer<typeof blockSchema>;
+export type ReaderState = z.infer<typeof readerStateSchema>;
+export type SourcePreview = z.infer<typeof sourcePreviewSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectInputSchema>;
 export type CreateProjectOutput = z.infer<typeof createProjectOutputSchema>;
 export type OpenProjectInput = z.infer<typeof openProjectInputSchema>;
@@ -196,6 +265,7 @@ export type DeleteProjectInput = z.infer<typeof deleteProjectInputSchema>;
 export type DeleteProjectOutput = z.infer<typeof deleteProjectOutputSchema>;
 export type ListProjectsOutput = z.infer<typeof listProjectsOutputSchema>;
 export type ListDocumentsOutput = z.infer<typeof listDocumentsOutputSchema>;
+export type ListBlocksOutput = z.infer<typeof listBlocksOutputSchema>;
 export type ImportFilesInput = z.infer<typeof importFilesInputSchema>;
 export type ImportFilesOutput = z.infer<typeof importFilesOutputSchema>;
 export type Job = z.infer<typeof jobSchema>;
@@ -204,6 +274,10 @@ export type EnqueueJobOutput = z.infer<typeof enqueueJobOutputSchema>;
 export type ListJobsOutput = z.infer<typeof listJobsOutputSchema>;
 export type RunJobInput = z.infer<typeof runJobInputSchema>;
 export type JobCommandOutput = z.infer<typeof jobCommandOutputSchema>;
+export type BlockCommandOutput = z.infer<typeof blockCommandOutputSchema>;
+export type ReaderStateCommandOutput = z.infer<typeof readerStateCommandOutputSchema>;
+export type GetSourcePreviewInput = z.infer<typeof getSourcePreviewInputSchema>;
+export type GetSourcePreviewOutput = z.infer<typeof getSourcePreviewOutputSchema>;
 export type ParserHealthResponse = z.infer<typeof parserHealthResponseSchema>;
 export type ParserParseRequest = z.infer<typeof parserParseRequestSchema>;
 export type ParserParseResponse = z.infer<typeof parserParseResponseSchema>;
@@ -235,6 +309,28 @@ export const commandSchemas = {
       projectId: z.string().min(1)
     }),
     output: listDocumentsOutputSchema
+  },
+  "block.list": {
+    input: z.object({
+      documentId: z.string().min(1)
+    }),
+    output: listBlocksOutputSchema
+  },
+  "block.update": {
+    input: z.object({
+      blockId: z.string().min(1),
+      isFavorite: z.boolean(),
+      note: z.string().optional()
+    }),
+    output: blockCommandOutputSchema
+  },
+  "reader.state.upsert": {
+    input: upsertReaderStateInputSchema,
+    output: readerStateCommandOutputSchema
+  },
+  "reader.sourcePreview": {
+    input: getSourcePreviewInputSchema,
+    output: getSourcePreviewOutputSchema
   },
   "job.enqueueMock": {
     input: enqueueJobInputSchema,

@@ -13,11 +13,13 @@ mod state;
 use std::sync::{Arc, Mutex};
 
 use commands::app::get_bootstrap_payload;
+use commands::block::{list_blocks_command, update_block_command};
 use commands::import::{import_files_command, list_documents_command};
 use commands::jobs::{
     cancel_job_command, enqueue_mock_job, list_jobs, retry_job_command, run_job_command,
 };
 use commands::project::{create_project, delete_project, list_projects, open_project};
+use commands::reader::{get_source_preview_command, upsert_reader_state_command};
 use state::AppState;
 
 fn main() {
@@ -34,6 +36,10 @@ fn main() {
             list_projects,
             import_files_command,
             list_documents_command,
+            list_blocks_command,
+            update_block_command,
+            upsert_reader_state_command,
+            get_source_preview_command,
             enqueue_mock_job,
             list_jobs,
             run_job_command,

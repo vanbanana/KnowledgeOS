@@ -570,7 +570,7 @@ Phase 0 基础工程
 ## Phase 3：切块引擎与阅读器 MVP
 
 ### TASK-030 设计 Block 数据结构与块状态
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-011, TASK-028]
@@ -587,7 +587,7 @@ Phase 0 基础工程
 - prompt_hint: 为 Block-first 架构定义稳定的 Block 数据模型与落库接口。
 
 ### TASK-031 实现结构切块引擎 v1
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-030]
@@ -603,7 +603,7 @@ Phase 0 基础工程
 - prompt_hint: 基于标题与锚点实现文档结构切块引擎。
 
 ### TASK-032 实现语义修整与块大小控制
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-031]
@@ -619,7 +619,7 @@ Phase 0 基础工程
 - prompt_hint: 实现一个基于 token 长度和段落边界的 Block rebalancer。
 
 ### TASK-033 设计稳定 block_id 算法
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-031, TASK-032]
@@ -635,7 +635,7 @@ Phase 0 基础工程
 - prompt_hint: 为 Block 设计尽量稳定的 ID 生成算法并补测试。
 
 ### TASK-034 切块结果写盘与索引
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-031, TASK-032, TASK-033]
@@ -651,7 +651,7 @@ Phase 0 基础工程
 - prompt_hint: 把切块结果可靠地落到 SQLite 和本地文件。
 
 ### TASK-035 阅读器主布局 UI
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-034, TASK-015]
@@ -668,7 +668,7 @@ Phase 0 基础工程
 - prompt_hint: 用 React 做一个 Block-first 阅读器，左树中内容右三栏布局。
 
 ### TASK-036 原文锚点回跳与阅读器状态恢复
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-035]
@@ -685,7 +685,7 @@ Phase 0 基础工程
 - prompt_hint: 为阅读器增加 source anchor 回跳与 last-read 恢复。
 
 ### TASK-037 Block 收藏与基础注释
-- status: todo
+- status: done
 - priority: P1
 - owner: ai
 - depends_on: [TASK-035]

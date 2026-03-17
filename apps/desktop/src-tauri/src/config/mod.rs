@@ -52,7 +52,10 @@ impl AppConfig {
     }
 }
 
-fn migrate_legacy_data_dir(legacy_base_dir: &PathBuf, target_base_dir: &PathBuf) -> Result<(), io::Error> {
+fn migrate_legacy_data_dir(
+    legacy_base_dir: &PathBuf,
+    target_base_dir: &PathBuf,
+) -> Result<(), io::Error> {
     if !legacy_base_dir.exists() || legacy_base_dir == target_base_dir {
         return Ok(());
     }
