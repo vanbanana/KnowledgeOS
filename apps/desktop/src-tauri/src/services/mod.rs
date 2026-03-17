@@ -1,6 +1,11 @@
 pub mod block;
+pub mod card;
 pub mod chunk;
+pub mod explain;
+pub mod graph;
 pub mod import;
 pub mod normalize;
 pub mod project;
 pub mod reader_state;
+pub mod search;
+pub mod vector;

@@ -705,7 +705,7 @@ Phase 0 基础工程
 ## Phase 4：Explain、Card 与搜索
 
 ### TASK-040 设计 Model Adapter 接口
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-003, TASK-015]
@@ -721,7 +721,7 @@ Phase 0 基础工程
 - prompt_hint: 设计一个统一的 Model Adapter，为未来云模型与本地模型预留接口。
 
 ### TASK-041 定义 Explain JSON schema 与 prompt 模板
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-040]
@@ -739,7 +739,7 @@ Phase 0 基础工程
 - prompt_hint: 根据 PRD 为 block explanation 设计结构化 JSON schema 与 prompt 模板。
 
 ### TASK-042 Explain Service 基础实现
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-041, TASK-034]
@@ -756,7 +756,7 @@ Phase 0 基础工程
 - prompt_hint: 实现 Block Explain Service，输出结构化 JSON 并写入 block_explanations 表。
 
 ### TASK-043 Explain 缓存与重算
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-042]
@@ -773,7 +773,7 @@ Phase 0 基础工程
 - prompt_hint: 为 Explain Service 增加可控缓存和重新生成。
 
 ### TASK-044 阅读器接入 Explain 面板
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-042, TASK-035]
@@ -789,7 +789,7 @@ Phase 0 基础工程
 - prompt_hint: 把结构化 explanation 接到阅读器右侧面板中。
 
 ### TASK-045 Card Service 基础实现
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-042]
@@ -805,7 +805,7 @@ Phase 0 基础工程
 - prompt_hint: 实现 Card Service，支持来源回溯到 block 和 explanation。
 
 ### TASK-046 Card UI 与标签
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-045]
@@ -822,7 +822,7 @@ Phase 0 基础工程
 - prompt_hint: 实现卡片库页面与最小标签能力。
 
 ### TASK-047 建立全文搜索（SQLite FTS）
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-011, TASK-034, TASK-045]
@@ -840,7 +840,7 @@ Phase 0 基础工程
 - prompt_hint: 用 SQLite FTS 为 documents/blocks/cards 实现全文搜索。
 
 ### TASK-048 建立向量索引抽象层
-- status: todo
+- status: done
 - priority: P1
 - owner: ai
 - depends_on: [TASK-045]
@@ -856,7 +856,7 @@ Phase 0 基础工程
 - prompt_hint: 先实现本地向量索引抽象，后续再接真实 embedding provider。
 
 ### TASK-049 混合搜索（FTS + semantic）
-- status: todo
+- status: done
 - priority: P1
 - owner: ai
 - depends_on: [TASK-047, TASK-048]
@@ -876,7 +876,7 @@ Phase 0 基础工程
 ## Phase 5：Graph
 
 ### TASK-050 设计图谱节点与关系模型
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-011, TASK-045]
@@ -893,7 +893,7 @@ Phase 0 基础工程
 - prompt_hint: 按 PRD 设计低噪声图谱数据模型，主节点不是全量 blocks。
 
 ### TASK-051 卡片到图谱节点映射
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-050]
@@ -908,7 +908,7 @@ Phase 0 基础工程
 - prompt_hint: 为 Card Service 增加 card 与 graph node 的同步逻辑。
 
 ### TASK-052 关系建议基础管线
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-050, TASK-051, TASK-042]
@@ -924,7 +924,7 @@ Phase 0 基础工程
 - prompt_hint: 根据 explanation.related_candidates 和规则生成图谱关系建议。
 
 ### TASK-053 图谱查询与过滤 API
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-050]
@@ -940,7 +940,7 @@ Phase 0 基础工程
 - prompt_hint: 为图谱页面实现可过滤的子图查询接口。
 
 ### TASK-054 图谱页面 MVP
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-053]
@@ -957,7 +957,7 @@ Phase 0 基础工程
 - prompt_hint: 实现一个围绕 card/concept/topic 的 MVP 图谱页面。
 
 ### TASK-055 手动关系编辑
-- status: todo
+- status: done
 - priority: P1
 - owner: ai
 - depends_on: [TASK-054]

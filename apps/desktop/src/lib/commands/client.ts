@@ -1,8 +1,15 @@
 import type {
   BlockCommandOutput,
+  CardCommandOutput,
+  ExplainBlockInput,
+  ExplainBlockOutput,
   GetSourcePreviewInput,
   GetSourcePreviewOutput,
+  GetSubgraphInput,
+  GetSubgraphOutput,
   ListBlocksOutput,
+  ListBlockExplanationsOutput,
+  ListCardsOutput,
   CreateProjectInput,
   CreateProjectOutput,
   DeleteProjectInput,
@@ -13,12 +20,23 @@ import type {
   ImportFilesOutput,
   JobCommandOutput,
   ListDocumentsOutput,
+  ListExplainTemplatesOutput,
   ListJobsOutput,
   ListProjectsOutput,
   OpenProjectInput,
   OpenProjectOutput,
   ReaderStateCommandOutput,
-  RunJobInput
+  RemoveRelationOutput,
+  RelationCommandOutput,
+  RelationIdInput,
+  RunJobInput,
+  SaveCardInput,
+  SearchInput,
+  SearchOutput,
+  SuggestRelationsInput,
+  SuggestRelationsOutput,
+  UpdateCardInput,
+  UpsertRelationInput
 } from "@knowledgeos/shared-types";
 import { invokeTyped } from "./invoke";
 import { desktopCommandSchemas, type BootstrapPayload } from "./schemas";
@@ -61,6 +79,62 @@ export async function updateBlock(input: {
   note?: string;
 }): Promise<BlockCommandOutput> {
   return invokeTyped(desktopCommandSchemas.blockUpdate, input);
+}
+
+export async function explainBlock(input: ExplainBlockInput): Promise<ExplainBlockOutput> {
+  return invokeTyped(desktopCommandSchemas.blockExplain, input);
+}
+
+export async function regenerateBlockExplanation(input: ExplainBlockInput): Promise<ExplainBlockOutput> {
+  return invokeTyped(desktopCommandSchemas.blockExplainRegenerate, input);
+}
+
+export async function listBlockExplanations(blockId: string): Promise<ListBlockExplanationsOutput> {
+  return invokeTyped(desktopCommandSchemas.blockExplainList, { blockId });
+}
+
+export async function listExplainTemplates(): Promise<ListExplainTemplatesOutput> {
+  return invokeTyped(desktopCommandSchemas.explainTemplateList, undefined);
+}
+
+export async function saveCard(input: SaveCardInput): Promise<CardCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.cardSave, input);
+}
+
+export async function listCards(projectId: string): Promise<ListCardsOutput> {
+  return invokeTyped(desktopCommandSchemas.cardList, { projectId });
+}
+
+export async function updateCard(input: UpdateCardInput): Promise<CardCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.cardUpdate, input);
+}
+
+export async function searchProject(input: SearchInput): Promise<SearchOutput> {
+  return invokeTyped(desktopCommandSchemas.searchQuery, input);
+}
+
+export async function hybridSearchProject(input: SearchInput): Promise<SearchOutput> {
+  return invokeTyped(desktopCommandSchemas.searchHybrid, input);
+}
+
+export async function getSubgraph(input: GetSubgraphInput): Promise<GetSubgraphOutput> {
+  return invokeTyped(desktopCommandSchemas.graphSubgraph, input);
+}
+
+export async function suggestRelations(input: SuggestRelationsInput): Promise<SuggestRelationsOutput> {
+  return invokeTyped(desktopCommandSchemas.graphSuggestRelations, input);
+}
+
+export async function upsertRelation(input: UpsertRelationInput): Promise<RelationCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.graphUpsertRelation, input);
+}
+
+export async function confirmRelation(input: RelationIdInput): Promise<RelationCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.graphConfirmRelation, input);
+}
+
+export async function removeRelation(input: RelationIdInput): Promise<RemoveRelationOutput> {
+  return invokeTyped(desktopCommandSchemas.graphRemoveRelation, input);
 }
 
 export async function upsertReaderState(input: {
