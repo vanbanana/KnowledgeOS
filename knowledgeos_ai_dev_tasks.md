@@ -412,7 +412,7 @@ Phase 0 基础工程
 ## Phase 2：导入、标准化与解析 worker
 
 ### TASK-020 设计文档导入流程与状态机
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-012, TASK-014, TASK-015]

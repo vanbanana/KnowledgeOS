@@ -13,6 +13,20 @@ export interface BootstrapState {
     createdAt: string;
     updatedAt: string;
   }>;
+  documents: Array<{
+    documentId: string;
+    projectId: string;
+    sourcePath: string;
+    sourceType: "pdf" | "pptx" | "docx" | "md" | "txt";
+    sourceHash: string | null;
+    normalizedMdPath: string | null;
+    manifestPath: string | null;
+    title: string | null;
+    parseStatus: "imported" | "parsing" | "normalized" | "chunked" | "indexed" | "ready" | "failed";
+    importedAt: string;
+    updatedAt: string | null;
+    lastErrorMessage: string | null;
+  }>;
   jobs: Array<{
     jobId: string;
     kind: string;
@@ -35,4 +49,3 @@ export const useAppStore = create<AppStore>((set) => ({
   bootstrap: null,
   setBootstrap: (bootstrap) => set({ bootstrap })
 }));
-

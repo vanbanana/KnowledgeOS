@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::jobs::{enqueue_job, list_jobs as query_jobs, JobRecord};
+use crate::jobs::{JobRecord, enqueue_job, list_jobs as query_jobs};
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -49,7 +49,9 @@ pub fn enqueue_mock_job(
 }
 
 #[tauri::command]
-pub fn list_jobs(state: tauri::State<'_, Arc<Mutex<AppState>>>) -> Result<ListJobsResponse, String> {
+pub fn list_jobs(
+    state: tauri::State<'_, Arc<Mutex<AppState>>>,
+) -> Result<ListJobsResponse, String> {
     let app_state = state.lock().map_err(|error| error.to_string())?;
     let jobs = query_jobs(&app_state.db).map_err(|error| error.to_string())?;
     Ok(ListJobsResponse { jobs })

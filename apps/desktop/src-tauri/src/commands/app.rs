@@ -2,8 +2,10 @@ use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
+use crate::commands::import::list_all_documents_for_bootstrap;
 use crate::jobs::JobRecord;
-use crate::services::project::{list_projects, ProjectRecord};
+use crate::services::import::DocumentRecord;
+use crate::services::project::{ProjectRecord, list_projects};
 use crate::state::AppState;
 
 #[derive(Debug, Serialize)]
@@ -13,6 +15,7 @@ pub struct BootstrapPayload {
     pub data_dir: String,
     pub log_dir: String,
     pub projects: Vec<ProjectRecord>,
+    pub documents: Vec<DocumentRecord>,
     pub jobs: Vec<JobRecord>,
 }
 
@@ -22,6 +25,7 @@ pub fn get_bootstrap_payload(
 ) -> Result<BootstrapPayload, String> {
     let app_state = state.lock().map_err(|error| error.to_string())?;
     let projects = list_projects(&app_state.db).map_err(|error| error.to_string())?;
+    let documents = list_all_documents_for_bootstrap(&app_state)?;
     let jobs = crate::jobs::list_jobs(&app_state.db).map_err(|error| error.to_string())?;
 
     Ok(BootstrapPayload {
@@ -29,7 +33,7 @@ pub fn get_bootstrap_payload(
         data_dir: app_state.config.data_dir.to_string_lossy().into_owned(),
         log_dir: app_state.config.log_dir.to_string_lossy().into_owned(),
         projects,
+        documents,
         jobs,
     })
 }
-

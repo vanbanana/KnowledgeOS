@@ -9,6 +9,16 @@ export const jobStatusSchema = z.enum([
 ]);
 
 export const projectStatusSchema = z.enum(["active", "archived"]);
+export const documentStatusSchema = z.enum([
+  "imported",
+  "parsing",
+  "normalized",
+  "chunked",
+  "indexed",
+  "ready",
+  "failed"
+]);
+export const documentSourceTypeSchema = z.enum(["pdf", "pptx", "docx", "md", "txt"]);
 
 export const logLevelSchema = z.enum(["trace", "debug", "info", "warn", "error"]);
 
@@ -29,6 +39,21 @@ export const projectSchema = z.object({
   updatedAt: z.string()
 });
 
+export const documentSchema = z.object({
+  documentId: z.string(),
+  projectId: z.string(),
+  sourcePath: z.string(),
+  sourceType: documentSourceTypeSchema,
+  sourceHash: z.string().nullable(),
+  normalizedMdPath: z.string().nullable(),
+  manifestPath: z.string().nullable(),
+  title: z.string().nullable(),
+  parseStatus: documentStatusSchema,
+  importedAt: z.string(),
+  updatedAt: z.string().nullable(),
+  lastErrorMessage: z.string().nullable()
+});
+
 export const createProjectInputSchema = z.object({
   name: z.string().min(1),
   description: z.string().trim().nullish().transform((value) => value ?? null)
@@ -41,6 +66,26 @@ export const createProjectOutputSchema = z.object({
 
 export const listProjectsOutputSchema = z.object({
   projects: z.array(projectSchema)
+});
+
+export const listDocumentsOutputSchema = z.object({
+  documents: z.array(documentSchema)
+});
+
+export const importFilesInputSchema = z.object({
+  projectId: z.string().min(1),
+  paths: z.array(z.string().min(1)).min(1)
+});
+
+export const importFilesOutputSchema = z.object({
+  documents: z.array(documentSchema),
+  queuedJobIds: z.array(z.string()),
+  errors: z.array(
+    z.object({
+      path: z.string(),
+      message: z.string()
+    })
+  )
 });
 
 export const jobSchema = z.object({
@@ -93,15 +138,21 @@ export const commandNameSchema = z.enum([
   "app.getBootstrap",
   "project.create",
   "project.list",
+  "document.importFiles",
+  "document.list",
   "job.enqueueMock",
   "job.list"
 ]);
 
 export type AppConfig = z.infer<typeof appConfigSchema>;
 export type Project = z.infer<typeof projectSchema>;
+export type Document = z.infer<typeof documentSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectInputSchema>;
 export type CreateProjectOutput = z.infer<typeof createProjectOutputSchema>;
 export type ListProjectsOutput = z.infer<typeof listProjectsOutputSchema>;
+export type ListDocumentsOutput = z.infer<typeof listDocumentsOutputSchema>;
+export type ImportFilesInput = z.infer<typeof importFilesInputSchema>;
+export type ImportFilesOutput = z.infer<typeof importFilesOutputSchema>;
 export type Job = z.infer<typeof jobSchema>;
 export type EnqueueJobInput = z.infer<typeof enqueueJobInputSchema>;
 export type EnqueueJobOutput = z.infer<typeof enqueueJobOutputSchema>;
@@ -120,6 +171,16 @@ export const commandSchemas = {
     input: z.undefined(),
     output: listProjectsOutputSchema
   },
+  "document.importFiles": {
+    input: importFilesInputSchema,
+    output: importFilesOutputSchema
+  },
+  "document.list": {
+    input: z.object({
+      projectId: z.string().min(1)
+    }),
+    output: listDocumentsOutputSchema
+  },
   "job.enqueueMock": {
     input: enqueueJobInputSchema,
     output: enqueueJobOutputSchema
@@ -129,4 +190,3 @@ export const commandSchemas = {
     output: listJobsOutputSchema
   }
 } as const;
-

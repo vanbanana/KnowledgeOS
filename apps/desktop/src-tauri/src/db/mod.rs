@@ -3,7 +3,10 @@ use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension};
 
-pub fn initialize_database(database_path: &Path, migrations_dir: &Path) -> Result<Connection, rusqlite::Error> {
+pub fn initialize_database(
+    database_path: &Path,
+    migrations_dir: &Path,
+) -> Result<Connection, rusqlite::Error> {
     if let Some(parent) = database_path.parent() {
         fs::create_dir_all(parent).map_err(|_| rusqlite::Error::ExecuteReturnedResults)?;
     }
@@ -62,4 +65,3 @@ fn run_migrations(connection: &Connection, migrations_dir: &Path) -> Result<(), 
 
     Ok(())
 }
-

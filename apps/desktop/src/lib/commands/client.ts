@@ -3,6 +3,9 @@ import type {
   CreateProjectOutput,
   EnqueueJobInput,
   EnqueueJobOutput,
+  ImportFilesInput,
+  ImportFilesOutput,
+  ListDocumentsOutput,
   ListJobsOutput,
   ListProjectsOutput
 } from "@knowledgeos/shared-types";
@@ -19,6 +22,14 @@ export async function createProject(input: CreateProjectInput): Promise<CreatePr
 
 export async function listProjects(): Promise<ListProjectsOutput> {
   return invokeTyped(desktopCommandSchemas.projectList, undefined);
+}
+
+export async function importFiles(input: ImportFilesInput): Promise<ImportFilesOutput> {
+  return invokeTyped(desktopCommandSchemas.documentImportFiles, input);
+}
+
+export async function listDocuments(projectId: string): Promise<ListDocumentsOutput> {
+  return invokeTyped(desktopCommandSchemas.documentList, { projectId });
 }
 
 export async function enqueueMockJob(input: EnqueueJobInput): Promise<EnqueueJobOutput> {

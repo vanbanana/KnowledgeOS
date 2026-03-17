@@ -12,6 +12,7 @@ mod state;
 use std::sync::{Arc, Mutex};
 
 use commands::app::get_bootstrap_payload;
+use commands::import::{import_files_command, list_documents_command};
 use commands::jobs::{enqueue_mock_job, list_jobs};
 use commands::project::{create_project, list_projects};
 use state::AppState;
@@ -26,10 +27,11 @@ fn main() {
             get_bootstrap_payload,
             create_project,
             list_projects,
+            import_files_command,
+            list_documents_command,
             enqueue_mock_job,
             list_jobs
         ])
         .run(tauri::generate_context!())
         .expect("运行 KnowledgeOS 失败");
 }
-

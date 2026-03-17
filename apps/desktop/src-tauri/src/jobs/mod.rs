@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -79,4 +79,3 @@ pub fn list_jobs(connection: &Connection) -> Result<Vec<JobRecord>, rusqlite::Er
 
     rows.collect()
 }
-

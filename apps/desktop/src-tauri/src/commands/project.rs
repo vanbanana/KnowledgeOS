@@ -3,7 +3,8 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::services::project::{
-    create_project_record, initialize_project_directories, list_projects as query_projects, ProjectRecord,
+    ProjectRecord, create_project_record, initialize_project_directories,
+    list_projects as query_projects,
 };
 use crate::state::AppState;
 
@@ -57,4 +58,3 @@ pub fn list_projects(
     let projects = query_projects(&app_state.db).map_err(|error| error.to_string())?;
     Ok(ListProjectsResponse { projects })
 }
-

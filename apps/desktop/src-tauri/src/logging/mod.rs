@@ -2,7 +2,7 @@ use std::fs::File;
 use std::path::Path;
 
 use chrono::Local;
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt};
 
 pub fn init_logging(log_dir: &Path) -> Result<(), std::io::Error> {
     let log_file = log_dir.join(format!("app-{}.log", Local::now().format("%Y%m%d")));
@@ -12,4 +12,3 @@ pub fn init_logging(log_dir: &Path) -> Result<(), std::io::Error> {
     let _ = tracing::subscriber::set_global_default(subscriber);
     Ok(())
 }
-

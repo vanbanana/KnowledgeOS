@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   createProjectInputSchema,
+  importFilesInputSchema,
   enqueueJobInputSchema,
   parserParseResponseSchema
 } from "./index";
@@ -15,6 +16,14 @@ test("createProjectInputSchema 应接受最小输入", () => {
 test("enqueueJobInputSchema 应填充默认重试次数", () => {
   const parsed = enqueueJobInputSchema.parse({ kind: "mock.job" });
   assert.equal(parsed.maxAttempts, 3);
+});
+
+test("importFilesInputSchema 应接受导入参数", () => {
+  const parsed = importFilesInputSchema.parse({
+    projectId: "project-1",
+    paths: ["E:/NOTE/fixtures/documents/sample-note.md"]
+  });
+  assert.equal(parsed.paths.length, 1);
 });
 
 test("parserParseResponseSchema 应校验最小解析结果", () => {

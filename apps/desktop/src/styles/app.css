@@ -100,8 +100,31 @@ button:disabled {
   padding: 1.25rem;
 }
 
+.panel-wide {
+  grid-column: 1 / -1;
+}
+
 .panel h2 {
   margin-top: 0;
+}
+
+.panel-copy,
+.feedback-text {
+  line-height: 1.6;
+  color: rgba(24, 32, 38, 0.78);
+}
+
+.path-input {
+  width: 100%;
+  min-height: 7.5rem;
+  resize: vertical;
+  margin: 0.5rem 0 0.9rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(24, 32, 38, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.88);
+  color: #182026;
+  font: 0.95rem/1.5 "Cascadia Code", "Microsoft YaHei UI", sans-serif;
 }
 
 .key-values,

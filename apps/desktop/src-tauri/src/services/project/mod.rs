@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -82,3 +82,27 @@ pub fn list_projects(connection: &Connection) -> Result<Vec<ProjectRecord>, rusq
     rows.collect()
 }
 
+pub fn get_project(
+    connection: &Connection,
+    project_id: &str,
+) -> Result<Option<ProjectRecord>, rusqlite::Error> {
+    let mut statement = connection.prepare(
+        "SELECT project_id, name, description, root_path, status, created_at, updated_at
+         FROM projects
+         WHERE project_id = ?1",
+    )?;
+    let mut rows = statement.query([project_id])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(ProjectRecord {
+            project_id: row.get(0)?,
+            name: row.get(1)?,
+            description: row.get(2)?,
+            root_path: row.get(3)?,
+            status: row.get(4)?,
+            created_at: row.get(5)?,
+            updated_at: row.get(6)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}

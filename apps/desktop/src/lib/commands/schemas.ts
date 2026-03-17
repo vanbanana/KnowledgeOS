@@ -3,6 +3,9 @@ import {
   appConfigSchema,
   createProjectInputSchema,
   createProjectOutputSchema,
+  importFilesInputSchema,
+  importFilesOutputSchema,
+  listDocumentsOutputSchema,
   enqueueJobInputSchema,
   enqueueJobOutputSchema,
   listJobsOutputSchema,
@@ -14,6 +17,7 @@ export const bootstrapPayloadSchema = z.object({
   dataDir: appConfigSchema.shape.dataDir,
   logDir: appConfigSchema.shape.logDir,
   projects: listProjectsOutputSchema.shape.projects,
+  documents: listDocumentsOutputSchema.shape.documents,
   jobs: listJobsOutputSchema.shape.jobs
 });
 
@@ -32,6 +36,18 @@ export const desktopCommandSchemas = {
     command: "list_projects",
     input: z.undefined(),
     output: listProjectsOutputSchema
+  },
+  documentImportFiles: {
+    command: "import_files_command",
+    input: importFilesInputSchema,
+    output: importFilesOutputSchema
+  },
+  documentList: {
+    command: "list_documents_command",
+    input: z.object({
+      projectId: z.string().min(1)
+    }),
+    output: listDocumentsOutputSchema
   },
   jobEnqueueMock: {
     command: "enqueue_mock_job",
