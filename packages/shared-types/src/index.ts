@@ -20,7 +20,7 @@ export const documentStatusSchema = z.enum([
 ]);
 export const documentSourceTypeSchema = z.enum(["pdf", "pptx", "docx", "md", "txt", "unknown"]);
 export const parserJobStatusSchema = z.enum(["pending", "running", "succeeded", "failed", "cancelled"]);
-export const blockTypeSchema = z.enum(["section", "paragraph"]);
+export const blockTypeSchema = z.enum(["section", "paragraph", "note"]);
 
 export const logLevelSchema = z.enum(["trace", "debug", "info", "warn", "error"]);
 
@@ -317,6 +317,16 @@ export const openProjectOutputSchema = z.object({
   project: projectSchema
 });
 
+export const renameProjectInputSchema = z.object({
+  projectId: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().trim().nullish().transform((value) => value ?? null)
+});
+
+export const renameProjectOutputSchema = z.object({
+  project: projectSchema
+});
+
 export const deleteProjectInputSchema = z.object({
   projectId: z.string().min(1),
   deleteFiles: z.boolean().default(true)
@@ -335,8 +345,46 @@ export const listDocumentsOutputSchema = z.object({
   documents: z.array(documentSchema)
 });
 
+export const deleteDocumentInputSchema = z.object({
+  documentId: z.string().min(1),
+  deleteFiles: z.boolean().default(true)
+});
+
+export const deleteDocumentOutputSchema = z.object({
+  documentId: z.string(),
+  deletedFiles: z.boolean()
+});
+
 export const listBlocksOutputSchema = z.object({
   blocks: z.array(blockSchema)
+});
+
+export const insertNoteBlockInputSchema = z.object({
+  documentId: z.string().min(1),
+  beforeBlockId: z.string().min(1).optional(),
+  title: z.string().optional(),
+  contentMd: z.string().min(1)
+});
+
+export const insertNoteBlockOutputSchema = z.object({
+  block: blockSchema
+});
+
+export const updateBlockInputSchema = z.object({
+  blockId: z.string().min(1),
+  isFavorite: z.boolean().optional(),
+  note: z.string().optional(),
+  title: z.string().nullable().optional(),
+  contentMd: z.string().min(1).optional()
+});
+
+export const deleteBlockInputSchema = z.object({
+  blockId: z.string().min(1)
+});
+
+export const deleteBlockOutputSchema = z.object({
+  blockId: z.string(),
+  deleted: z.boolean()
 });
 
 export const importFilesInputSchema = z.object({
@@ -413,6 +461,24 @@ export const getSourcePreviewOutputSchema = z.object({
   preview: sourcePreviewSchema
 });
 
+export const chatWithBlockInputSchema = z.object({
+  blockId: z.string().min(1).optional(),
+  question: z.string().min(1),
+  requestId: z.string().min(1),
+  history: z.array(
+    z.object({
+      role: z.enum(["user", "assistant"]),
+      content: z.string().min(1)
+    })
+  ).default([])
+});
+
+export const chatWithBlockOutputSchema = z.object({
+  answer: z.string(),
+  model: z.string(),
+  provider: z.string()
+});
+
 export const explainBlockInputSchema = z.object({
   blockId: z.string().min(1),
   mode: z.string().optional()
@@ -465,12 +531,16 @@ export const commandNameSchema = z.enum([
   "app.getBootstrap",
   "project.create",
   "project.open",
+  "project.rename",
   "project.delete",
   "project.list",
   "document.importFiles",
   "document.list",
+  "document.delete",
   "block.list",
   "block.update",
+  "block.delete",
+  "block.insertNote",
   "block.explain",
   "block.explain.regenerate",
   "block.explain.list",
@@ -487,6 +557,7 @@ export const commandNameSchema = z.enum([
   "graph.relation.remove",
   "reader.state.upsert",
   "reader.sourcePreview",
+  "reader.chatWithBlock",
   "job.enqueueMock",
   "job.list",
   "job.run",
@@ -509,11 +580,20 @@ export type CreateProjectInput = z.infer<typeof createProjectInputSchema>;
 export type CreateProjectOutput = z.infer<typeof createProjectOutputSchema>;
 export type OpenProjectInput = z.infer<typeof openProjectInputSchema>;
 export type OpenProjectOutput = z.infer<typeof openProjectOutputSchema>;
+export type RenameProjectInput = z.infer<typeof renameProjectInputSchema>;
+export type RenameProjectOutput = z.infer<typeof renameProjectOutputSchema>;
 export type DeleteProjectInput = z.infer<typeof deleteProjectInputSchema>;
 export type DeleteProjectOutput = z.infer<typeof deleteProjectOutputSchema>;
 export type ListProjectsOutput = z.infer<typeof listProjectsOutputSchema>;
 export type ListDocumentsOutput = z.infer<typeof listDocumentsOutputSchema>;
+export type DeleteDocumentInput = z.infer<typeof deleteDocumentInputSchema>;
+export type DeleteDocumentOutput = z.infer<typeof deleteDocumentOutputSchema>;
 export type ListBlocksOutput = z.infer<typeof listBlocksOutputSchema>;
+export type InsertNoteBlockInput = z.infer<typeof insertNoteBlockInputSchema>;
+export type InsertNoteBlockOutput = z.infer<typeof insertNoteBlockOutputSchema>;
+export type UpdateBlockInput = z.infer<typeof updateBlockInputSchema>;
+export type DeleteBlockInput = z.infer<typeof deleteBlockInputSchema>;
+export type DeleteBlockOutput = z.infer<typeof deleteBlockOutputSchema>;
 export type ImportFilesInput = z.infer<typeof importFilesInputSchema>;
 export type ImportFilesOutput = z.infer<typeof importFilesOutputSchema>;
 export type Job = z.infer<typeof jobSchema>;
@@ -526,6 +606,8 @@ export type BlockCommandOutput = z.infer<typeof blockCommandOutputSchema>;
 export type ReaderStateCommandOutput = z.infer<typeof readerStateCommandOutputSchema>;
 export type GetSourcePreviewInput = z.infer<typeof getSourcePreviewInputSchema>;
 export type GetSourcePreviewOutput = z.infer<typeof getSourcePreviewOutputSchema>;
+export type ChatWithBlockInput = z.infer<typeof chatWithBlockInputSchema>;
+export type ChatWithBlockOutput = z.infer<typeof chatWithBlockOutputSchema>;
 export type ExplainBlockInput = z.infer<typeof explainBlockInputSchema>;
 export type ExplainBlockOutput = z.infer<typeof explainBlockOutputSchema>;
 export type RegenerateExplainBlockInput = z.infer<typeof regenerateExplainBlockInputSchema>;
@@ -568,6 +650,10 @@ export const commandSchemas = {
     input: openProjectInputSchema,
     output: openProjectOutputSchema
   },
+  "project.rename": {
+    input: renameProjectInputSchema,
+    output: renameProjectOutputSchema
+  },
   "project.delete": {
     input: deleteProjectInputSchema,
     output: deleteProjectOutputSchema
@@ -582,6 +668,10 @@ export const commandSchemas = {
     }),
     output: listDocumentsOutputSchema
   },
+  "document.delete": {
+    input: deleteDocumentInputSchema,
+    output: deleteDocumentOutputSchema
+  },
   "block.list": {
     input: z.object({
       documentId: z.string().min(1)
@@ -589,12 +679,16 @@ export const commandSchemas = {
     output: listBlocksOutputSchema
   },
   "block.update": {
-    input: z.object({
-      blockId: z.string().min(1),
-      isFavorite: z.boolean(),
-      note: z.string().optional()
-    }),
+    input: updateBlockInputSchema,
     output: blockCommandOutputSchema
+  },
+  "block.delete": {
+    input: deleteBlockInputSchema,
+    output: deleteBlockOutputSchema
+  },
+  "block.insertNote": {
+    input: insertNoteBlockInputSchema,
+    output: insertNoteBlockOutputSchema
   },
   "block.explain": {
     input: explainBlockInputSchema,
@@ -663,6 +757,10 @@ export const commandSchemas = {
   "reader.sourcePreview": {
     input: getSourcePreviewInputSchema,
     output: getSourcePreviewOutputSchema
+  },
+  "reader.chatWithBlock": {
+    input: chatWithBlockInputSchema,
+    output: chatWithBlockOutputSchema
   },
   "job.enqueueMock": {
     input: enqueueJobInputSchema,

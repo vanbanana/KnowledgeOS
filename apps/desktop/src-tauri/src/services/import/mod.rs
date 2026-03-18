@@ -323,6 +323,76 @@ pub fn get_document(
     }
 }
 
+pub fn delete_document(
+    connection: &Connection,
+    document_id: &str,
+    delete_files: bool,
+) -> Result<Option<DocumentRecord>, String> {
+    let document = get_document(connection, document_id).map_err(|error| error.to_string())?;
+    let Some(document) = document else {
+        return Ok(None);
+    };
+
+    let mut statement = connection
+        .prepare("SELECT block_id FROM blocks WHERE document_id = ?1")
+        .map_err(|error| error.to_string())?;
+    let block_ids = statement
+        .query_map([document_id], |row| row.get::<_, String>(0))
+        .map_err(|error| error.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+
+    let mut card_ids = Vec::new();
+    for block_id in &block_ids {
+        let mut card_statement = connection
+            .prepare("SELECT card_id FROM cards WHERE source_block_id = ?1")
+            .map_err(|error| error.to_string())?;
+        let rows = card_statement
+            .query_map([block_id], |row| row.get::<_, String>(0))
+            .map_err(|error| error.to_string())?;
+        for row in rows {
+            card_ids.push(row.map_err(|error| error.to_string())?);
+        }
+    }
+
+    for card_id in &card_ids {
+        connection
+            .execute("DELETE FROM graph_relations WHERE from_node_id IN (SELECT node_id FROM graph_nodes WHERE source_ref = ?1) OR to_node_id IN (SELECT node_id FROM graph_nodes WHERE source_ref = ?1)", [card_id])
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute(
+                "DELETE FROM graph_nodes WHERE source_ref = ?1",
+                [card_id],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .execute("DELETE FROM cards WHERE card_id = ?1", [card_id])
+            .map_err(|error| error.to_string())?;
+    }
+
+    connection
+        .execute(
+            "DELETE FROM reader_states WHERE document_id = ?1",
+            [document_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "DELETE FROM jobs WHERE payload_json LIKE ?1",
+            [format!("%\"documentId\":\"{document_id}\"%")],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute("DELETE FROM documents WHERE document_id = ?1", [document_id])
+        .map_err(|error| error.to_string())?;
+
+    if delete_files {
+        remove_document_files(&document)?;
+    }
+
+    Ok(Some(document))
+}
+
 pub fn transition_document_status(
     connection: &Connection,
     document_id: &str,
@@ -437,6 +507,37 @@ fn create_failed_document_record(
         .map_err(|error| error.to_string())?;
 
     Ok(document)
+}
+
+fn remove_document_files(document: &DocumentRecord) -> Result<(), String> {
+    remove_path_if_exists(&document.source_path)?;
+    if let Some(path) = document.normalized_md_path.as_deref() {
+        remove_path_if_exists(path)?;
+    }
+    if let Some(path) = document.manifest_path.as_deref() {
+        remove_path_if_exists(path)?;
+    }
+
+    let project_root = Path::new(&document.source_path)
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| "无法推断项目目录".to_string())?;
+    let blocks_jsonl = project_root
+        .join("blocks")
+        .join(format!("{}.jsonl", document.document_id));
+    if blocks_jsonl.exists() {
+        fs::remove_file(blocks_jsonl).map_err(|error| error.to_string())?;
+    }
+
+    Ok(())
+}
+
+fn remove_path_if_exists(path: &str) -> Result<(), String> {
+    let file_path = Path::new(path);
+    if file_path.exists() {
+        fs::remove_file(file_path).map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn map_document_row(row: &rusqlite::Row<'_>) -> Result<DocumentRecord, rusqlite::Error> {

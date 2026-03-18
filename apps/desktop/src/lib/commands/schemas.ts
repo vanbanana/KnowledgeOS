@@ -3,6 +3,8 @@ import {
   appConfigSchema,
   blockCommandOutputSchema,
   cardCommandOutputSchema,
+  chatWithBlockInputSchema,
+  chatWithBlockOutputSchema,
   getSourcePreviewInputSchema,
   getSourcePreviewOutputSchema,
   getSubgraphInputSchema,
@@ -12,6 +14,10 @@ import {
   listCardsOutputSchema,
   createProjectInputSchema,
   createProjectOutputSchema,
+  deleteBlockInputSchema,
+  deleteBlockOutputSchema,
+  deleteDocumentInputSchema,
+  deleteDocumentOutputSchema,
   deleteProjectInputSchema,
   deleteProjectOutputSchema,
   explainBlockInputSchema,
@@ -26,6 +32,8 @@ import {
   listJobsOutputSchema,
   openProjectInputSchema,
   openProjectOutputSchema,
+  renameProjectInputSchema,
+  renameProjectOutputSchema,
   readerStateCommandOutputSchema,
   relationCommandOutputSchema,
   relationIdInputSchema,
@@ -68,6 +76,11 @@ export const desktopCommandSchemas = {
     input: openProjectInputSchema,
     output: openProjectOutputSchema
   },
+  projectRename: {
+    command: "rename_project",
+    input: renameProjectInputSchema,
+    output: renameProjectOutputSchema
+  },
   projectDelete: {
     command: "delete_project",
     input: deleteProjectInputSchema,
@@ -90,6 +103,11 @@ export const desktopCommandSchemas = {
     }),
     output: listDocumentsOutputSchema
   },
+  documentDelete: {
+    command: "delete_document_command",
+    input: deleteDocumentInputSchema,
+    output: deleteDocumentOutputSchema
+  },
   blockList: {
     command: "list_blocks_command",
     input: z.object({
@@ -97,14 +115,31 @@ export const desktopCommandSchemas = {
     }),
     output: listBlocksOutputSchema
   },
+  blockInsertNote: {
+    command: "insert_note_block_command",
+    input: z.object({
+      documentId: z.string().min(1),
+      beforeBlockId: z.string().min(1).optional(),
+      title: z.string().optional(),
+      contentMd: z.string().min(1)
+    }),
+    output: blockCommandOutputSchema
+  },
   blockUpdate: {
     command: "update_block_command",
     input: z.object({
       blockId: z.string().min(1),
-      isFavorite: z.boolean(),
-      note: z.string().optional()
+      isFavorite: z.boolean().optional(),
+      note: z.string().optional(),
+      title: z.string().nullable().optional(),
+      contentMd: z.string().min(1).optional()
     }),
     output: blockCommandOutputSchema
+  },
+  blockDelete: {
+    command: "delete_block_command",
+    input: deleteBlockInputSchema,
+    output: deleteBlockOutputSchema
   },
   blockExplain: {
     command: "explain_block_command",
@@ -198,6 +233,11 @@ export const desktopCommandSchemas = {
     command: "get_source_preview_command",
     input: getSourcePreviewInputSchema,
     output: getSourcePreviewOutputSchema
+  },
+  readerChatWithBlock: {
+    command: "chat_with_block_command",
+    input: chatWithBlockInputSchema,
+    output: chatWithBlockOutputSchema
   },
   jobEnqueueMock: {
     command: "enqueue_mock_job",

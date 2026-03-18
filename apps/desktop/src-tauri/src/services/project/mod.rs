@@ -137,3 +137,31 @@ pub fn delete_project(
 
     Ok(Some(project))
 }
+
+pub fn rename_project(
+    connection: &Connection,
+    project_id: &str,
+    name: &str,
+    description: Option<&str>,
+) -> Result<Option<ProjectRecord>, String> {
+    let trimmed_name = name.trim();
+    if trimmed_name.is_empty() {
+        return Err("项目名称不能为空".to_string());
+    }
+
+    let now: DateTime<Utc> = Utc::now();
+    let affected = connection
+        .execute(
+            "UPDATE projects
+             SET name = ?1, description = ?2, updated_at = ?3
+             WHERE project_id = ?4",
+            params![trimmed_name, description, now.to_rfc3339(), project_id],
+        )
+        .map_err(|error| error.to_string())?;
+
+    if affected == 0 {
+        return Ok(None);
+    }
+
+    get_project(connection, project_id).map_err(|error| error.to_string())
+}

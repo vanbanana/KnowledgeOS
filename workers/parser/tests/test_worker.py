@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from docx import Document
@@ -15,7 +16,7 @@ WORKER = ROOT / "workers" / "parser" / "main.py"
 
 def test_health() -> None:
     completed = subprocess.run(
-        ["python", str(WORKER), "health"],
+        [sys.executable, str(WORKER), "health"],
         capture_output=True,
         check=True,
         text=True,
@@ -30,7 +31,7 @@ def test_parse_file(tmp_path: Path) -> None:
 
     completed = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(WORKER),
             "parse_file",
             "--file-path",
@@ -56,7 +57,7 @@ def test_parse_docx(tmp_path: Path) -> None:
 
     completed = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(WORKER),
             "parse_file",
             "--file-path",
@@ -84,7 +85,7 @@ def test_parse_pptx(tmp_path: Path) -> None:
 
     completed = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(WORKER),
             "parse_file",
             "--file-path",
@@ -110,7 +111,7 @@ def test_parse_pdf(tmp_path: Path) -> None:
 
     completed = subprocess.run(
         [
-            "python",
+            sys.executable,
             str(WORKER),
             "parse_file",
             "--file-path",
@@ -125,3 +126,5 @@ def test_parse_pdf(tmp_path: Path) -> None:
     payload = json.loads(completed.stdout)
     assert payload["ok"] is True
     assert payload["manifest"]["sourceType"] == "pdf"
+    assert "当前 PDF 没有提取到可转换的正文内容" in payload["markdown"]
+    assert payload["manifest"]["warnings"]

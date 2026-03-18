@@ -8,11 +8,9 @@ use wait_timeout::ChildExt;
 
 #[allow(dead_code)]
 pub fn parser_health(config: &AppConfig) -> Result<serde_json::Value, String> {
-    let output = run_parser_command(
-        Command::new("python")
-            .arg(&config.parser_worker_path)
-            .arg("health"),
-    )?;
+    let mut command = build_python_command(&config.parser_worker_path);
+    command.arg("health");
+    let output = run_parser_command(&mut command)?;
     parse_json_output(output)
 }
 
@@ -21,17 +19,32 @@ pub fn parse_document(
     source_path: &str,
     source_type: &str,
 ) -> Result<NormalizeResult, String> {
-    let output = run_parser_command(
-        Command::new("python")
-            .arg(&config.parser_worker_path)
-            .arg("parse_file")
-            .arg("--file-path")
-            .arg(source_path)
-            .arg("--source-type")
-            .arg(source_type),
-    )?;
+    let mut command = build_python_command(&config.parser_worker_path);
+    command
+        .arg("parse_file")
+        .arg("--file-path")
+        .arg(source_path)
+        .arg("--source-type")
+        .arg(source_type);
+    let output = run_parser_command(&mut command)?;
     let payload = parse_json_output(output)?;
     serde_json::from_value(payload).map_err(|error| error.to_string())
+}
+
+fn build_python_command(worker_path: &std::path::Path) -> Command {
+    #[cfg(target_os = "windows")]
+    {
+        let mut command = Command::new("py");
+        command.arg("-3").arg(worker_path);
+        command
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut command = Command::new("python3");
+        command.arg(worker_path);
+        command
+    }
 }
 
 fn run_parser_command(command: &mut Command) -> Result<std::process::Output, String> {

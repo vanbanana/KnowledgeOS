@@ -154,7 +154,9 @@ fn explain_block_with_options(
         task_type: "block.explain".to_string(),
         provider: provider.to_string(),
         model: model_name.to_string(),
+        system_prompt: template.system_prompt.clone(),
         prompt,
+        output_format: "json".to_string(),
         context_blocks: vec![block.content_md.clone()],
         metadata_json: serde_json::json!({
             "blockId": block.block_id,

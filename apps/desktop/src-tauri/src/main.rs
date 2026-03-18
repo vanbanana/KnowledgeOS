@@ -14,7 +14,9 @@ mod state;
 use std::sync::{Arc, Mutex};
 
 use commands::app::get_bootstrap_payload;
-use commands::block::{list_blocks_command, update_block_command};
+use commands::block::{
+    delete_block_command, insert_note_block_command, list_blocks_command, update_block_command,
+};
 use commands::card::{list_cards_command, save_card_command, update_card_command};
 use commands::explain::{
     explain_block_command, list_block_explanations_command, list_explain_templates_command,
@@ -24,13 +26,19 @@ use commands::graph::{
     confirm_relation_command, get_subgraph_command, remove_relation_command,
     suggest_relations_command, upsert_relation_command,
 };
-use commands::import::{import_files_command, list_documents_command};
+use commands::import::{delete_document_command, import_files_command, list_documents_command};
 use commands::jobs::{
     cancel_job_command, enqueue_mock_job, list_jobs, retry_job_command, run_job_command,
 };
-use commands::project::{create_project, delete_project, list_projects, open_project};
-use commands::reader::{get_source_preview_command, upsert_reader_state_command};
+use commands::project::{create_project, delete_project, list_projects, open_project, rename_project};
+use commands::reader::{
+    chat_with_block_command, get_source_preview_command, upsert_reader_state_command,
+};
 use commands::search::{hybrid_search_project_command, search_project_command};
+use commands::window::{
+    close_window_command, minimize_window_command, start_window_drag_command,
+    toggle_maximize_window_command,
+};
 use state::AppState;
 
 fn main() {
@@ -38,17 +46,22 @@ fn main() {
     let managed_state = Arc::new(Mutex::new(app_state));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(managed_state)
         .invoke_handler(tauri::generate_handler![
             get_bootstrap_payload,
             create_project,
             open_project,
+            rename_project,
             delete_project,
             list_projects,
             import_files_command,
             list_documents_command,
+            delete_document_command,
             list_blocks_command,
             update_block_command,
+            delete_block_command,
+            insert_note_block_command,
             explain_block_command,
             regenerate_block_explanation_command,
             list_block_explanations_command,
@@ -65,6 +78,11 @@ fn main() {
             remove_relation_command,
             upsert_reader_state_command,
             get_source_preview_command,
+            chat_with_block_command,
+            start_window_drag_command,
+            minimize_window_command,
+            toggle_maximize_window_command,
+            close_window_command,
             enqueue_mock_job,
             list_jobs,
             run_job_command,

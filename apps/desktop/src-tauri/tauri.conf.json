@@ -16,7 +16,8 @@
         "title": "KnowledgeOS",
         "width": 1440,
         "height": 920,
-        "resizable": true
+        "resizable": true,
+        "decorations": false
       }
     ],
     "security": {

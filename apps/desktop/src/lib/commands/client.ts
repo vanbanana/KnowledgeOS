@@ -1,6 +1,8 @@
 import type {
   BlockCommandOutput,
   CardCommandOutput,
+  ChatWithBlockInput,
+  ChatWithBlockOutput,
   ExplainBlockInput,
   ExplainBlockOutput,
   GetSourcePreviewInput,
@@ -12,12 +14,17 @@ import type {
   ListCardsOutput,
   CreateProjectInput,
   CreateProjectOutput,
+  DeleteBlockInput,
+  DeleteBlockOutput,
+  DeleteDocumentInput,
+  DeleteDocumentOutput,
   DeleteProjectInput,
   DeleteProjectOutput,
   EnqueueJobInput,
   EnqueueJobOutput,
   ImportFilesInput,
   ImportFilesOutput,
+  InsertNoteBlockInput,
   JobCommandOutput,
   ListDocumentsOutput,
   ListExplainTemplatesOutput,
@@ -25,6 +32,8 @@ import type {
   ListProjectsOutput,
   OpenProjectInput,
   OpenProjectOutput,
+  RenameProjectInput,
+  RenameProjectOutput,
   ReaderStateCommandOutput,
   RemoveRelationOutput,
   RelationCommandOutput,
@@ -53,6 +62,10 @@ export async function openProject(input: OpenProjectInput): Promise<OpenProjectO
   return invokeTyped(desktopCommandSchemas.projectOpen, input);
 }
 
+export async function renameProject(input: RenameProjectInput): Promise<RenameProjectOutput> {
+  return invokeTyped(desktopCommandSchemas.projectRename, input);
+}
+
 export async function deleteProject(input: DeleteProjectInput): Promise<DeleteProjectOutput> {
   return invokeTyped(desktopCommandSchemas.projectDelete, input);
 }
@@ -69,16 +82,30 @@ export async function listDocuments(projectId: string): Promise<ListDocumentsOut
   return invokeTyped(desktopCommandSchemas.documentList, { projectId });
 }
 
+export async function deleteDocument(input: DeleteDocumentInput): Promise<DeleteDocumentOutput> {
+  return invokeTyped(desktopCommandSchemas.documentDelete, input);
+}
+
 export async function listBlocks(documentId: string): Promise<ListBlocksOutput> {
   return invokeTyped(desktopCommandSchemas.blockList, { documentId });
 }
 
 export async function updateBlock(input: {
   blockId: string;
-  isFavorite: boolean;
+  isFavorite?: boolean;
   note?: string;
+  title?: string | null;
+  contentMd?: string;
 }): Promise<BlockCommandOutput> {
   return invokeTyped(desktopCommandSchemas.blockUpdate, input);
+}
+
+export async function deleteBlock(input: DeleteBlockInput): Promise<DeleteBlockOutput> {
+  return invokeTyped(desktopCommandSchemas.blockDelete, input);
+}
+
+export async function insertNoteBlock(input: InsertNoteBlockInput): Promise<BlockCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.blockInsertNote, input);
 }
 
 export async function explainBlock(input: ExplainBlockInput): Promise<ExplainBlockOutput> {
@@ -148,6 +175,10 @@ export async function upsertReaderState(input: {
 
 export async function getSourcePreview(input: GetSourcePreviewInput): Promise<GetSourcePreviewOutput> {
   return invokeTyped(desktopCommandSchemas.readerSourcePreview, input);
+}
+
+export async function chatWithBlock(input: ChatWithBlockInput): Promise<ChatWithBlockOutput> {
+  return invokeTyped(desktopCommandSchemas.readerChatWithBlock, input);
 }
 
 export async function enqueueMockJob(input: EnqueueJobInput): Promise<EnqueueJobOutput> {

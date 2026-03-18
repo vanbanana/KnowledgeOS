@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::services::project::{
     ProjectRecord, create_project_record, delete_project as remove_project, get_project,
-    initialize_project_directories, list_projects as query_projects,
+    initialize_project_directories, list_projects as query_projects, rename_project as update_project,
 };
 use crate::state::AppState;
 
@@ -28,6 +28,14 @@ pub struct DeleteProjectPayload {
     pub delete_files: Option<bool>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameProjectPayload {
+    pub project_id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreateProjectResponse {
@@ -44,6 +52,12 @@ pub struct ListProjectsResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenProjectResponse {
+    pub project: ProjectRecord,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameProjectResponse {
     pub project: ProjectRecord,
 }
 
@@ -86,6 +100,22 @@ pub fn open_project(
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "项目不存在".to_string())?;
     Ok(OpenProjectResponse { project })
+}
+
+#[tauri::command]
+pub fn rename_project(
+    payload: RenameProjectPayload,
+    state: tauri::State<'_, Arc<Mutex<AppState>>>,
+) -> Result<RenameProjectResponse, String> {
+    let app_state = state.lock().map_err(|error| error.to_string())?;
+    let project = update_project(
+        &app_state.db,
+        &payload.project_id,
+        payload.name.trim(),
+        payload.description.as_deref(),
+    )?
+    .ok_or_else(|| "项目不存在".to_string())?;
+    Ok(RenameProjectResponse { project })
 }
 
 #[tauri::command]
