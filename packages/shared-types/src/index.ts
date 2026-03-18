@@ -248,10 +248,162 @@ export const graphRelationSchema = z.object({
   createdAt: z.string()
 });
 
+export const agentTaskStatusSchema = z.enum([
+  "drafted",
+  "planned",
+  "awaiting_approval",
+  "executing",
+  "completed",
+  "failed",
+  "rolled_back",
+  "cancelled"
+]);
+
+export const agentRiskLevelSchema = z.enum(["low", "medium", "high"]);
+
+export const agentToolNameSchema = z.enum([
+  "read_project_tree",
+  "read_document",
+  "rename_file",
+  "move_file",
+  "update_markdown",
+  "merge_cards",
+  "update_tags",
+  "create_relation",
+  "remove_relation",
+  "export_project"
+]);
+
+export const agentPlanStepSchema = z.object({
+  stepId: z.string(),
+  title: z.string(),
+  toolName: agentToolNameSchema,
+  reason: z.string(),
+  riskLevel: agentRiskLevelSchema,
+  argumentsJson: z.string(),
+  targetRefs: z.array(z.string()).default([])
+});
+
+export const agentPlanSchema = z.object({
+  goal: z.string(),
+  summary: z.string(),
+  requiresApproval: z.boolean(),
+  plannerVersion: z.string(),
+  modelName: z.string(),
+  steps: z.array(agentPlanStepSchema)
+});
+
+export const agentPreviewItemSchema = z.object({
+  itemId: z.string(),
+  kind: z.string(),
+  label: z.string(),
+  targetRef: z.string().nullable(),
+  riskLevel: agentRiskLevelSchema,
+  beforeSummary: z.string().nullable(),
+  afterSummary: z.string().nullable()
+});
+
+export const agentPreviewSchema = z.object({
+  summary: z.string(),
+  impactSummary: z.array(z.string()).default([]),
+  risks: z.array(z.string()).default([]),
+  items: z.array(agentPreviewItemSchema).default([])
+});
+
+export const agentTaskSchema = z.object({
+  taskId: z.string(),
+  projectId: z.string(),
+  taskText: z.string(),
+  taskType: z.string().nullable(),
+  status: agentTaskStatusSchema,
+  planJson: z.string().nullable(),
+  previewJson: z.string().nullable(),
+  approvalRequired: z.boolean(),
+  executionLogPath: z.string().nullable(),
+  rollbackRef: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
+export const agentTaskLogSchema = z.object({
+  logId: z.string(),
+  taskId: z.string(),
+  level: logLevelSchema,
+  message: z.string(),
+  createdAt: z.string()
+});
+
+export const snapshotRecordSchema = z.object({
+  snapshotId: z.string(),
+  taskId: z.string().nullable(),
+  entityType: z.string(),
+  entityId: z.string(),
+  filePath: z.string().nullable(),
+  contentHash: z.string().nullable(),
+  snapshotJson: z.string(),
+  createdAt: z.string()
+});
+
+export const auditDiffEntrySchema = z.object({
+  snapshotId: z.string(),
+  entityType: z.string(),
+  entityId: z.string(),
+  label: z.string(),
+  beforeText: z.string().nullable(),
+  afterText: z.string().nullable()
+});
+
 export const relationSuggestionSchema = z.object({
   relation: graphRelationSchema,
   fromNodeLabel: z.string(),
   toNodeLabel: z.string()
+});
+
+export const planAgentTaskInputSchema = z.object({
+  projectId: z.string().min(1),
+  taskText: z.string().min(1)
+});
+
+export const agentTaskIdInputSchema = z.object({
+  taskId: z.string().min(1)
+});
+
+export const listAgentTasksInputSchema = z.object({
+  projectId: z.string().min(1)
+});
+
+export const listAgentTasksOutputSchema = z.object({
+  tasks: z.array(agentTaskSchema)
+});
+
+export const agentTaskCommandOutputSchema = z.object({
+  task: agentTaskSchema
+});
+
+export const planAgentTaskOutputSchema = z.object({
+  task: agentTaskSchema,
+  plan: agentPlanSchema
+});
+
+export const generateAgentPreviewOutputSchema = z.object({
+  task: agentTaskSchema,
+  preview: agentPreviewSchema
+});
+
+export const rollbackAgentTaskOutputSchema = z.object({
+  task: agentTaskSchema,
+  rolledBack: z.boolean()
+});
+
+export const listAgentTaskLogsOutputSchema = z.object({
+  logs: z.array(agentTaskLogSchema)
+});
+
+export const getAgentAuditOutputSchema = z.object({
+  task: agentTaskSchema,
+  logs: z.array(agentTaskLogSchema),
+  snapshots: z.array(snapshotRecordSchema),
+  diffs: z.array(auditDiffEntrySchema)
 });
 
 export const getSubgraphInputSchema = z.object({
@@ -558,6 +710,13 @@ export const commandNameSchema = z.enum([
   "reader.state.upsert",
   "reader.sourcePreview",
   "reader.chatWithBlock",
+  "agent.plan",
+  "agent.list",
+  "agent.preview",
+  "agent.confirm",
+  "agent.rollback",
+  "agent.logs",
+  "agent.audit",
   "job.enqueueMock",
   "job.list",
   "job.run",
@@ -623,7 +782,27 @@ export type SearchOutput = z.infer<typeof searchOutputSchema>;
 export type SearchResult = z.infer<typeof searchResultSchema>;
 export type GraphNode = z.infer<typeof graphNodeSchema>;
 export type GraphRelation = z.infer<typeof graphRelationSchema>;
+export type AgentTaskStatus = z.infer<typeof agentTaskStatusSchema>;
+export type AgentToolName = z.infer<typeof agentToolNameSchema>;
+export type AgentPlanStep = z.infer<typeof agentPlanStepSchema>;
+export type AgentPlan = z.infer<typeof agentPlanSchema>;
+export type AgentPreviewItem = z.infer<typeof agentPreviewItemSchema>;
+export type AgentPreview = z.infer<typeof agentPreviewSchema>;
+export type AgentTask = z.infer<typeof agentTaskSchema>;
+export type AgentTaskLog = z.infer<typeof agentTaskLogSchema>;
+export type SnapshotRecord = z.infer<typeof snapshotRecordSchema>;
+export type AuditDiffEntry = z.infer<typeof auditDiffEntrySchema>;
 export type RelationSuggestion = z.infer<typeof relationSuggestionSchema>;
+export type PlanAgentTaskInput = z.infer<typeof planAgentTaskInputSchema>;
+export type AgentTaskIdInput = z.infer<typeof agentTaskIdInputSchema>;
+export type ListAgentTasksInput = z.infer<typeof listAgentTasksInputSchema>;
+export type ListAgentTasksOutput = z.infer<typeof listAgentTasksOutputSchema>;
+export type AgentTaskCommandOutput = z.infer<typeof agentTaskCommandOutputSchema>;
+export type PlanAgentTaskOutput = z.infer<typeof planAgentTaskOutputSchema>;
+export type GenerateAgentPreviewOutput = z.infer<typeof generateAgentPreviewOutputSchema>;
+export type RollbackAgentTaskOutput = z.infer<typeof rollbackAgentTaskOutputSchema>;
+export type ListAgentTaskLogsOutput = z.infer<typeof listAgentTaskLogsOutputSchema>;
+export type GetAgentAuditOutput = z.infer<typeof getAgentAuditOutputSchema>;
 export type GetSubgraphInput = z.infer<typeof getSubgraphInputSchema>;
 export type GetSubgraphOutput = z.infer<typeof getSubgraphOutputSchema>;
 export type SuggestRelationsInput = z.infer<typeof suggestRelationsInputSchema>;
@@ -761,6 +940,34 @@ export const commandSchemas = {
   "reader.chatWithBlock": {
     input: chatWithBlockInputSchema,
     output: chatWithBlockOutputSchema
+  },
+  "agent.plan": {
+    input: planAgentTaskInputSchema,
+    output: planAgentTaskOutputSchema
+  },
+  "agent.list": {
+    input: listAgentTasksInputSchema,
+    output: listAgentTasksOutputSchema
+  },
+  "agent.preview": {
+    input: agentTaskIdInputSchema,
+    output: generateAgentPreviewOutputSchema
+  },
+  "agent.confirm": {
+    input: agentTaskIdInputSchema,
+    output: agentTaskCommandOutputSchema
+  },
+  "agent.rollback": {
+    input: agentTaskIdInputSchema,
+    output: rollbackAgentTaskOutputSchema
+  },
+  "agent.logs": {
+    input: agentTaskIdInputSchema,
+    output: listAgentTaskLogsOutputSchema
+  },
+  "agent.audit": {
+    input: agentTaskIdInputSchema,
+    output: getAgentAuditOutputSchema
   },
   "job.enqueueMock": {
     input: enqueueJobInputSchema,

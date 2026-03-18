@@ -258,7 +258,7 @@ pub fn get_node_by_source_ref(
         .map_err(|error| error.to_string())
 }
 
-fn get_relation(
+pub fn get_relation(
     connection: &Connection,
     relation_id: &str,
 ) -> Result<Option<GraphRelationRecord>, String> {

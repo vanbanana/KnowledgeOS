@@ -16,6 +16,7 @@ import {
   renameProject,
   runJob
 } from "../lib/commands/client";
+import { AgentWorkspace } from "./AgentWorkspace";
 import { CardsWorkspace } from "./CardsWorkspace";
 import { GraphWorkspace } from "./GraphWorkspace";
 import { ReaderWorkspace } from "./ReaderWorkspace";
@@ -601,7 +602,9 @@ export function Dashboard({ bootstrap }: DashboardProps) {
           </section>
         </aside>
 
-        {currentView === "卡片" ? (
+        {currentView === "Agent" ? (
+          <AgentWorkspace currentProject={currentProject} />
+        ) : currentView === "卡片" ? (
           <CardsWorkspace currentProject={currentProject} />
         ) : currentView === "图谱" ? (
           <GraphWorkspace

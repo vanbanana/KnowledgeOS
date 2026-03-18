@@ -5,6 +5,16 @@ import {
   cardCommandOutputSchema,
   chatWithBlockInputSchema,
   chatWithBlockOutputSchema,
+  planAgentTaskInputSchema,
+  planAgentTaskOutputSchema,
+  listAgentTasksInputSchema,
+  listAgentTasksOutputSchema,
+  agentTaskIdInputSchema,
+  generateAgentPreviewOutputSchema,
+  agentTaskCommandOutputSchema,
+  rollbackAgentTaskOutputSchema,
+  listAgentTaskLogsOutputSchema,
+  getAgentAuditOutputSchema,
   getSourcePreviewInputSchema,
   getSourcePreviewOutputSchema,
   getSubgraphInputSchema,
@@ -238,6 +248,41 @@ export const desktopCommandSchemas = {
     command: "chat_with_block_command",
     input: chatWithBlockInputSchema,
     output: chatWithBlockOutputSchema
+  },
+  agentPlan: {
+    command: "plan_agent_task_command",
+    input: planAgentTaskInputSchema,
+    output: planAgentTaskOutputSchema
+  },
+  agentList: {
+    command: "list_agent_tasks_command",
+    input: listAgentTasksInputSchema,
+    output: listAgentTasksOutputSchema
+  },
+  agentPreview: {
+    command: "generate_agent_preview_command",
+    input: agentTaskIdInputSchema,
+    output: generateAgentPreviewOutputSchema
+  },
+  agentConfirm: {
+    command: "confirm_agent_task_command",
+    input: agentTaskIdInputSchema,
+    output: agentTaskCommandOutputSchema
+  },
+  agentRollback: {
+    command: "rollback_agent_task_command",
+    input: agentTaskIdInputSchema,
+    output: rollbackAgentTaskOutputSchema
+  },
+  agentLogs: {
+    command: "list_agent_task_logs_command",
+    input: agentTaskIdInputSchema,
+    output: listAgentTaskLogsOutputSchema
+  },
+  agentAudit: {
+    command: "get_agent_audit_command",
+    input: agentTaskIdInputSchema,
+    output: getAgentAuditOutputSchema
   },
   jobEnqueueMock: {
     command: "enqueue_mock_job",

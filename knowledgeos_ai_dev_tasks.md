@@ -976,7 +976,7 @@ Phase 0 基础工程
 ## Phase 6：Agent、安全、快照与回滚
 
 ### TASK-060 定义 AgentTask schema 与状态机
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-011]
@@ -993,7 +993,7 @@ Phase 0 基础工程
 - prompt_hint: 定义 AgentTask 的状态机和数据模型。
 
 ### TASK-061 设计 Tool Registry（白名单工具）
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-060]
@@ -1009,7 +1009,7 @@ Phase 0 基础工程
 - prompt_hint: 为 Agent 实现白名单工具注册表，不允许任意 shell。
 
 ### TASK-062 路径沙盒与文件权限控制
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-061, TASK-013]
@@ -1025,7 +1025,7 @@ Phase 0 基础工程
 - prompt_hint: 实现 project_root 级别的路径沙盒和路径穿越防护。
 
 ### TASK-063 Snapshot Manager
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-011, TASK-062]
@@ -1041,7 +1041,7 @@ Phase 0 基础工程
 - prompt_hint: 实现快照系统，为 Agent 的可回滚执行做基础。
 
 ### TASK-064 Rollback Manager
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-063]
@@ -1057,7 +1057,7 @@ Phase 0 基础工程
 - prompt_hint: 为 Agent 执行实现按 task_id 回滚，并补充索引修复逻辑。
 
 ### TASK-065 Agent Planner 协议与输出 schema
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-040, TASK-060, TASK-061]
@@ -1075,7 +1075,7 @@ Phase 0 基础工程
 - prompt_hint: 为本地知识 Agent 设计结构化 plan 和 preview schema。
 
 ### TASK-066 Agent Planner 基础实现
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-065]
@@ -1091,7 +1091,7 @@ Phase 0 基础工程
 - prompt_hint: 实现 Agent Planner，只生成 plan，不直接执行工具。
 
 ### TASK-067 Preview Generator
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-066, TASK-061]
@@ -1107,7 +1107,7 @@ Phase 0 基础工程
 - prompt_hint: 实现 Agent 的 dry-run 预览器，输出 impact summary。
 
 ### TASK-068 Agent Executor
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-067, TASK-063]
@@ -1124,7 +1124,7 @@ Phase 0 基础工程
 - prompt_hint: 实现一个只执行已批准 plan 的 Agent Executor。
 
 ### TASK-069 Agent Console UI
-- status: todo
+- status: done
 - priority: P0
 - owner: ai
 - depends_on: [TASK-066, TASK-067, TASK-068]
@@ -1140,7 +1140,7 @@ Phase 0 基础工程
 - prompt_hint: 实现一个面向 plan/preview/execute/rollback 的 Agent 控制台。
 
 ### TASK-070 审计日志与 diff 查看器
-- status: todo
+- status: done
 - priority: P1
 - owner: ai
 - depends_on: [TASK-068]

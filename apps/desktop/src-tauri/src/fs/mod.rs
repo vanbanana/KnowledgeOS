@@ -1,3 +1,5 @@
+pub mod sandbox;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

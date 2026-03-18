@@ -1,3 +1,5 @@
+pub mod agent;
+pub mod audit;
 pub mod block;
 pub mod card;
 pub mod chunk;
@@ -7,5 +9,7 @@ pub mod import;
 pub mod normalize;
 pub mod project;
 pub mod reader_state;
+pub mod rollback;
 pub mod search;
+pub mod snapshot;
 pub mod vector;

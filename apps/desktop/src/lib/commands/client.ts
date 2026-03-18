@@ -1,6 +1,9 @@
 import type {
   BlockCommandOutput,
   CardCommandOutput,
+  AgentTaskCommandOutput,
+  GenerateAgentPreviewOutput,
+  GetAgentAuditOutput,
   ChatWithBlockInput,
   ChatWithBlockOutput,
   ExplainBlockInput,
@@ -12,6 +15,9 @@ import type {
   ListBlocksOutput,
   ListBlockExplanationsOutput,
   ListCardsOutput,
+  ListAgentTaskLogsOutput,
+  ListAgentTasksInput,
+  ListAgentTasksOutput,
   CreateProjectInput,
   CreateProjectOutput,
   DeleteBlockInput,
@@ -32,9 +38,12 @@ import type {
   ListProjectsOutput,
   OpenProjectInput,
   OpenProjectOutput,
+  PlanAgentTaskInput,
+  PlanAgentTaskOutput,
   RenameProjectInput,
   RenameProjectOutput,
   ReaderStateCommandOutput,
+  RollbackAgentTaskOutput,
   RemoveRelationOutput,
   RelationCommandOutput,
   RelationIdInput,
@@ -179,6 +188,34 @@ export async function getSourcePreview(input: GetSourcePreviewInput): Promise<Ge
 
 export async function chatWithBlock(input: ChatWithBlockInput): Promise<ChatWithBlockOutput> {
   return invokeTyped(desktopCommandSchemas.readerChatWithBlock, input);
+}
+
+export async function planAgentTask(input: PlanAgentTaskInput): Promise<PlanAgentTaskOutput> {
+  return invokeTyped(desktopCommandSchemas.agentPlan, input);
+}
+
+export async function listAgentTasks(input: ListAgentTasksInput): Promise<ListAgentTasksOutput> {
+  return invokeTyped(desktopCommandSchemas.agentList, input);
+}
+
+export async function generateAgentPreview(taskId: string): Promise<GenerateAgentPreviewOutput> {
+  return invokeTyped(desktopCommandSchemas.agentPreview, { taskId });
+}
+
+export async function confirmAgentTask(taskId: string): Promise<AgentTaskCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.agentConfirm, { taskId });
+}
+
+export async function rollbackAgentTask(taskId: string): Promise<RollbackAgentTaskOutput> {
+  return invokeTyped(desktopCommandSchemas.agentRollback, { taskId });
+}
+
+export async function listAgentTaskLogs(taskId: string): Promise<ListAgentTaskLogsOutput> {
+  return invokeTyped(desktopCommandSchemas.agentLogs, { taskId });
+}
+
+export async function getAgentAudit(taskId: string): Promise<GetAgentAuditOutput> {
+  return invokeTyped(desktopCommandSchemas.agentAudit, { taskId });
 }
 
 export async function enqueueMockJob(input: EnqueueJobInput): Promise<EnqueueJobOutput> {

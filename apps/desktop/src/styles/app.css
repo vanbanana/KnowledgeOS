@@ -1498,6 +1498,15 @@ body.is-note-dragging-block * {
   color: #f0b1b1;
 }
 
+.agent-workspace-grid {
+  grid-template-columns: 300px minmax(0, 1fr) 360px;
+}
+
+.agent-task-input {
+  min-height: 120px;
+  resize: vertical;
+}
+
 @keyframes import-shimmer {
   0% {
     background-position: 200% 0, 0 0;

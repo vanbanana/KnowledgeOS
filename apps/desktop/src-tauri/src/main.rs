@@ -13,6 +13,11 @@ mod state;
 
 use std::sync::{Arc, Mutex};
 
+use commands::agent::{
+    confirm_agent_task_command, generate_agent_preview_command, get_agent_audit_command,
+    list_agent_task_logs_command, list_agent_tasks_command, plan_agent_task_command,
+    rollback_agent_task_command,
+};
 use commands::app::get_bootstrap_payload;
 use commands::block::{
     delete_block_command, insert_note_block_command, list_blocks_command, update_block_command,
@@ -79,6 +84,13 @@ fn main() {
             upsert_reader_state_command,
             get_source_preview_command,
             chat_with_block_command,
+            plan_agent_task_command,
+            list_agent_tasks_command,
+            generate_agent_preview_command,
+            confirm_agent_task_command,
+            rollback_agent_task_command,
+            list_agent_task_logs_command,
+            get_agent_audit_command,
             start_window_drag_command,
             minimize_window_command,
             toggle_maximize_window_command,
