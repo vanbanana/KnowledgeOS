@@ -78,84 +78,119 @@ pub struct GetAgentAuditCommandResponse {
 }
 
 #[tauri::command]
-pub fn plan_agent_task_command(
+pub async fn plan_agent_task_command(
     payload: PlanAgentTaskPayload,
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<PlanAgentTaskCommandResponse, String> {
-    let app_state = state.lock().map_err(|error| error.to_string())?;
-    let (task, plan) = plan_agent_task(&app_state, &payload.project_id, &payload.task_text)?;
-    Ok(PlanAgentTaskCommandResponse { task, plan })
+    let shared_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_state = shared_state.lock().map_err(|error| error.to_string())?;
+        let (task, plan) = plan_agent_task(&app_state, &payload.project_id, &payload.task_text)?;
+        Ok(PlanAgentTaskCommandResponse { task, plan })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn list_agent_tasks_command(
+pub async fn list_agent_tasks_command(
     payload: ListAgentTasksPayload,
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<ListAgentTasksCommandResponse, String> {
-    let app_state = state.lock().map_err(|error| error.to_string())?;
-    let tasks = list_agent_tasks(&app_state.db, &payload.project_id)?;
-    Ok(ListAgentTasksCommandResponse { tasks })
+    let shared_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_state = shared_state.lock().map_err(|error| error.to_string())?;
+        let tasks = list_agent_tasks(&app_state.db, &payload.project_id)?;
+        Ok(ListAgentTasksCommandResponse { tasks })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn generate_agent_preview_command(
+pub async fn generate_agent_preview_command(
     payload: AgentTaskIdPayload,
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<GenerateAgentPreviewCommandResponse, String> {
-    let app_state = state.lock().map_err(|error| error.to_string())?;
-    let (task, preview) = generate_preview(&app_state, &payload.task_id)?;
-    Ok(GenerateAgentPreviewCommandResponse { task, preview })
+    let shared_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_state = shared_state.lock().map_err(|error| error.to_string())?;
+        let (task, preview) = generate_preview(&app_state, &payload.task_id)?;
+        Ok(GenerateAgentPreviewCommandResponse { task, preview })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn confirm_agent_task_command(
+pub async fn confirm_agent_task_command(
     payload: AgentTaskIdPayload,
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<AgentTaskCommandResponse, String> {
-    let app_state = state.lock().map_err(|error| error.to_string())?;
-    let task = confirm_and_execute(&app_state, &payload.task_id)?;
-    Ok(AgentTaskCommandResponse { task })
+    let shared_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_state = shared_state.lock().map_err(|error| error.to_string())?;
+        let task = confirm_and_execute(&app_state, &payload.task_id)?;
+        Ok(AgentTaskCommandResponse { task })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn rollback_agent_task_command(
+pub async fn rollback_agent_task_command(
     payload: AgentTaskIdPayload,
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<RollbackAgentTaskCommandResponse, String> {
-    let app_state = state.lock().map_err(|error| error.to_string())?;
-    let task = rollback_agent_task(&app_state, &payload.task_id)?;
-    Ok(RollbackAgentTaskCommandResponse {
-        task,
-        rolled_back: true,
+    let shared_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_state = shared_state.lock().map_err(|error| error.to_string())?;
+        let task = rollback_agent_task(&app_state, &payload.task_id)?;
+        Ok(RollbackAgentTaskCommandResponse {
+            task,
+            rolled_back: true,
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn list_agent_task_logs_command(
+pub async fn list_agent_task_logs_command(
     payload: AgentTaskIdPayload,
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<ListAgentTaskLogsCommandResponse, String> {
-    let app_state = state.lock().map_err(|error| error.to_string())?;
-    let logs = crate::services::agent::list_task_logs(&app_state.db, &payload.task_id)?;
-    Ok(ListAgentTaskLogsCommandResponse { logs })
+    let shared_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_state = shared_state.lock().map_err(|error| error.to_string())?;
+        let logs = crate::services::agent::list_task_logs(&app_state.db, &payload.task_id)?;
+        Ok(ListAgentTaskLogsCommandResponse { logs })
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
-pub fn get_agent_audit_command(
+pub async fn get_agent_audit_command(
     payload: AgentTaskIdPayload,
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<GetAgentAuditCommandResponse, String> {
-    let app_state = state.lock().map_err(|error| error.to_string())?;
-    let AgentAuditRecord {
-        task,
-        logs,
-        snapshots,
-        diffs,
-    } = get_agent_audit(&app_state, &payload.task_id)?;
-    Ok(GetAgentAuditCommandResponse {
-        task,
-        logs,
-        snapshots,
-        diffs,
+    let shared_state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let app_state = shared_state.lock().map_err(|error| error.to_string())?;
+        let AgentAuditRecord {
+            task,
+            logs,
+            snapshots,
+            diffs,
+        } = get_agent_audit(&app_state, &payload.task_id)?;
+        Ok(GetAgentAuditCommandResponse {
+            task,
+            logs,
+            snapshots,
+            diffs,
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
 }

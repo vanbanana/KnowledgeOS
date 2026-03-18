@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::jobs::{JobRecord, enqueue_job};
+use crate::services::chunk::rebuild_missing_blocks;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -283,6 +284,39 @@ pub fn get_all_documents(connection: &Connection) -> Result<Vec<DocumentRecord>,
     rows.collect()
 }
 
+pub fn cleanup_unreadable_documents(connection: &Connection) -> Result<(), String> {
+    let documents = get_all_documents(connection).map_err(|error| error.to_string())?;
+    for document in documents {
+        let source_path = normalize_filesystem_path(&document.source_path);
+        let source_missing = !source_path.exists();
+        let block_count: i64 = connection
+            .query_row(
+                "SELECT COUNT(1) FROM blocks WHERE document_id = ?1",
+                [document.document_id.as_str()],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if block_count > 0 {
+            continue;
+        }
+
+        let maybe_project_root = source_path
+            .parent()
+            .and_then(Path::parent)
+            .map(Path::to_path_buf);
+        if let Some(project_root) = maybe_project_root {
+            if rebuild_missing_blocks(connection, &project_root, &document.document_id).is_ok() {
+                continue;
+            }
+        }
+
+        if source_missing {
+            let _ = delete_document(connection, &document.document_id, false)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn find_document_by_hash(
     connection: &Connection,
     project_id: &str,
@@ -518,7 +552,8 @@ fn remove_document_files(document: &DocumentRecord) -> Result<(), String> {
         remove_path_if_exists(path)?;
     }
 
-    let project_root = Path::new(&document.source_path)
+    let source_path = normalize_filesystem_path(&document.source_path);
+    let project_root = source_path
         .parent()
         .and_then(Path::parent)
         .ok_or_else(|| "无法推断项目目录".to_string())?;
@@ -533,11 +568,15 @@ fn remove_document_files(document: &DocumentRecord) -> Result<(), String> {
 }
 
 fn remove_path_if_exists(path: &str) -> Result<(), String> {
-    let file_path = Path::new(path);
+    let file_path = normalize_filesystem_path(path);
     if file_path.exists() {
-        fs::remove_file(file_path).map_err(|error| error.to_string())?;
+        fs::remove_file(&file_path).map_err(|error| error.to_string())?;
     }
     Ok(())
+}
+
+fn normalize_filesystem_path(path: &str) -> PathBuf {
+    PathBuf::from(path.trim_start_matches(r"\\?\"))
 }
 
 fn map_document_row(row: &rusqlite::Row<'_>) -> Result<DocumentRecord, rusqlite::Error> {

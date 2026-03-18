@@ -1,8 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
-import type { Block, Document, Project } from "@knowledgeos/shared-types";
-import { chatWithBlock, deleteBlock, insertNoteBlock, listBlocks, updateBlock, upsertReaderState } from "../lib/commands/client";
+import type { AgentTask, Block, Document, GetAgentAuditOutput, Project } from "@knowledgeos/shared-types";
+import {
+  chatWithBlock,
+  confirmAgentTask,
+  deleteBlock,
+  generateAgentPreview,
+  getAgentAudit,
+  insertNoteBlock,
+  listBlocks,
+  planAgentTask,
+  updateBlock,
+  upsertReaderState
+} from "../lib/commands/client";
 import { MarkdownArticle } from "./MarkdownArticle";
 
 interface ReaderWorkspaceProps {
@@ -15,9 +26,27 @@ interface ReaderWorkspaceProps {
 
 interface ChatMessage {
   id: string;
-  role: "assistant" | "user";
+  role: "assistant" | "user" | "system";
   content: string;
   isStreaming?: boolean;
+  mode?: "ask" | "agent";
+  agentState?: AgentMessageState;
+}
+
+interface AgentTimelineItem {
+  id: string;
+  title: string;
+  status: "pending" | "running" | "completed" | "failed";
+  summary: string;
+  detail?: string;
+}
+
+interface AgentMessageState {
+  taskId?: string;
+  status: "planning" | "previewing" | "executing" | "completed" | "failed";
+  summary: string;
+  result?: string;
+  timeline: AgentTimelineItem[];
 }
 
 interface ChatStreamEventPayload {
@@ -50,10 +79,12 @@ export function ReaderWorkspace({
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [referencedBlockId, setReferencedBlockId] = useState<string | null>(null);
   const [chatDraft, setChatDraft] = useState("");
+  const [chatMode, setChatMode] = useState<"ask" | "agent">("ask");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const [draggingMessageId, setDraggingMessageId] = useState<string | null>(null);
   const [dragPreview, setDragPreview] = useState<DragPreviewState | null>(null);
+  const [agentRunning, setAgentRunning] = useState(false);
   const [openDocumentIds, setOpenDocumentIds] = useState<string[]>(() =>
     currentDocument ? [currentDocument.documentId] : []
   );
@@ -62,6 +93,7 @@ export function ReaderWorkspace({
   const [editingBlockContent, setEditingBlockContent] = useState("");
   const currentRequestIdRef = useRef<string | null>(null);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const chatBodyRef = useRef<HTMLDivElement | null>(null);
   const blockStackRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const documentBlocksRef = useRef<HTMLDivElement | null>(null);
   const dragCandidateRef = useRef<{
@@ -212,6 +244,62 @@ export function ReaderWorkspace({
     element.style.height = `${nextHeight}px`;
     element.style.overflowY = element.scrollHeight > 132 ? "auto" : "hidden";
   }, [chatDraft, referencedBlockId]);
+
+  useEffect(() => {
+    const body = chatBodyRef.current;
+    if (!body) {
+      return;
+    }
+
+    const hasStreaming = chatMessages.some((message) => message.isStreaming)
+      || chatMessages.some((message) => {
+        const status = message.agentState?.status;
+        return status === "planning" || status === "previewing" || status === "executing";
+      });
+
+    const scrollBehavior: ScrollBehavior = hasStreaming ? "smooth" : "auto";
+    window.requestAnimationFrame(() => {
+      body.scrollTo({
+        top: body.scrollHeight,
+        behavior: scrollBehavior
+      });
+      window.setTimeout(() => {
+        body.scrollTo({
+          top: body.scrollHeight,
+          behavior: "auto"
+        });
+      }, 40);
+    });
+  }, [chatMessages]);
+
+  function updateAgentMessage(messageId: string, updater: (current: AgentMessageState) => AgentMessageState) {
+    setChatMessages((current) =>
+      current.map((message) => {
+        if (message.id !== messageId || !message.agentState) {
+          return message;
+        }
+
+        return {
+          ...message,
+          agentState: updater(message.agentState)
+        };
+      })
+    );
+  }
+
+  function pushAgentTimelineItem(messageId: string, item: AgentTimelineItem) {
+    updateAgentMessage(messageId, (current) => ({
+      ...current,
+      timeline: [...current.timeline, item]
+    }));
+  }
+
+  function replaceAgentTimelineItem(messageId: string, itemId: string, updater: (item: AgentTimelineItem) => AgentTimelineItem) {
+    updateAgentMessage(messageId, (current) => ({
+      ...current,
+      timeline: current.timeline.map((item) => item.id === itemId ? updater(item) : item)
+    }));
+  }
 
   const readerStateMutation = useMutation({
     mutationFn: upsertReaderState,
@@ -403,6 +491,146 @@ export function ReaderWorkspace({
     }
   });
 
+  async function runAgentConversation(taskText: string) {
+    if (!currentProject) {
+      setChatMessages((current) => [
+        ...current,
+        {
+          id: `system-${Date.now()}`,
+          role: "system",
+          content: "请先打开一个项目，再使用 Agent 模式。"
+        }
+      ]);
+      return;
+    }
+
+    const messageId = `assistant-agent-${Date.now()}`;
+    setAgentRunning(true);
+    setChatMessages((current) => [
+      ...current,
+      {
+        id: messageId,
+        role: "assistant",
+        content: "",
+        mode: "agent",
+        agentState: {
+          status: "planning",
+          summary: "正在理解任务并生成执行计划…",
+          timeline: [
+            {
+              id: "plan",
+              title: "分析任务",
+              status: "running",
+              summary: "正在结合当前项目内容生成可执行计划。"
+            }
+          ]
+        }
+      }
+    ]);
+
+    try {
+      const planResult = await planAgentTask({
+        projectId: currentProject.projectId,
+        taskText
+      });
+
+      updateAgentMessage(messageId, (current) => ({
+        ...current,
+        taskId: planResult.task.taskId,
+        status: "previewing",
+        summary: `已生成计划，共 ${planResult.plan.steps.length} 步。正在生成预览…`
+      }));
+
+      replaceAgentTimelineItem(messageId, "plan", (item) => ({
+        ...item,
+        status: "completed",
+        summary: `已生成 ${planResult.plan.steps.length} 个步骤。`,
+        detail: planResult.plan.steps.map((step, index) => `${index + 1}. ${step.title}\n工具：${step.toolName}\n参数：${step.argumentsJson}`).join("\n\n")
+      }));
+
+      pushAgentTimelineItem(messageId, {
+        id: "preview",
+        title: "生成预览",
+        status: "running",
+        summary: "正在检查这次任务将影响哪些对象。"
+      });
+
+      const previewResult = await generateAgentPreview(planResult.task.taskId);
+      replaceAgentTimelineItem(messageId, "preview", (item) => ({
+        ...item,
+        status: "completed",
+        summary: previewResult.preview.summary,
+        detail: previewResult.preview.items.map((entry, index) => `${index + 1}. ${entry.label}\n风险：${entry.riskLevel}\n前：${entry.beforeSummary ?? "无"}\n后：${entry.afterSummary ?? "无"}`).join("\n\n")
+      }));
+
+      pushAgentTimelineItem(messageId, {
+        id: "execute",
+        title: "执行任务",
+        status: "running",
+        summary: "正在调用本地白名单工具执行任务。"
+      });
+
+      updateAgentMessage(messageId, (current) => ({
+        ...current,
+        status: "executing",
+        summary: "正在执行计划，滚动输出执行日志…"
+      }));
+
+      await confirmAgentTask(planResult.task.taskId);
+
+      let finalAudit: GetAgentAuditOutput | null = null;
+      for (let round = 0; round < 30; round += 1) {
+        const audit = await getAgentAudit(planResult.task.taskId);
+        finalAudit = audit;
+        replaceAgentTimelineItem(messageId, "execute", (item) => ({
+          ...item,
+          status: audit.task.status === "failed" ? "failed" : audit.task.status === "completed" ? "completed" : "running",
+          summary: buildAgentExecutionSummary(audit),
+          detail: buildAgentExecutionDetail(audit)
+        }));
+
+        updateAgentMessage(messageId, (current) => ({
+          ...current,
+          status: audit.task.status === "failed" ? "failed" : audit.task.status === "completed" ? "completed" : "executing",
+          summary: buildAgentExecutionSummary(audit),
+          result: audit.task.status === "completed"
+            ? buildAgentResultText(audit)
+            : audit.task.status === "failed"
+              ? buildAgentFailureText(audit)
+              : current.result
+        }));
+
+        if (audit.task.status === "completed" || audit.task.status === "failed" || audit.task.status === "rolled_back" || audit.task.status === "cancelled") {
+          break;
+        }
+
+        await sleep(600);
+      }
+
+      if (!finalAudit) {
+        throw new Error("未能读取到 Agent 执行结果。");
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
+      await queryClient.invalidateQueries({ queryKey: ["document-blocks", currentDocument?.documentId] });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Agent 执行失败";
+      updateAgentMessage(messageId, (current) => ({
+        ...current,
+        status: "failed",
+        summary: "任务执行失败。",
+        result: message,
+        timeline: current.timeline.map((item) =>
+          item.status === "running"
+            ? { ...item, status: "failed", summary: message }
+            : item
+        )
+      }));
+    } finally {
+      setAgentRunning(false);
+    }
+  }
+
   function handleSelectBlock(block: Block) {
     setSelectedBlockId(block.blockId);
     setReferencedBlockId(block.blockId);
@@ -412,6 +640,50 @@ export function ReaderWorkspace({
     setEditingBlockId(block.blockId);
     setEditingBlockTitle(block.title ?? "");
     setEditingBlockContent(block.contentMd);
+  }
+
+  function handleSendChat() {
+    const nextQuestion = chatDraft.trim() || (referencedBlock ? "请直接解析这个知识块。" : "请直接回答用户问题。");
+    setChatMessages((current) => [
+      ...current,
+      {
+        id: `user-${Date.now()}`,
+        role: "user",
+        content: nextQuestion
+      }
+    ]);
+    setChatDraft("");
+    if (chatMode === "agent") {
+      void runAgentConversation(nextQuestion);
+      return;
+    }
+
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const nextHistory = chatMessages
+      .filter((item) =>
+        (item.role === "user" || item.role === "assistant")
+        && item.mode !== "agent"
+        && item.content.trim().length > 0
+      )
+      .slice(-6)
+      .map((item) => ({ role: item.role as "user" | "assistant", content: item.content }));
+
+    currentRequestIdRef.current = requestId;
+    setChatMessages((current) => [
+      ...current,
+      {
+        id: `assistant-${requestId}`,
+        role: "assistant",
+        content: "",
+        isStreaming: true
+      }
+    ]);
+    chatMutation.mutate({
+      blockId: referencedBlock?.blockId,
+      question: nextQuestion,
+      requestId,
+      history: nextHistory
+    });
   }
 
   function handleCancelEditBlock() {
@@ -696,7 +968,7 @@ export function ReaderWorkspace({
           <span>AI Chat</span>
         </div>
 
-        <div className="chat-pane-body">
+        <div className="chat-pane-body" ref={chatBodyRef}>
           <div className="chat-stream">
             {chatMessages.map((message) => (
               <div
@@ -724,8 +996,46 @@ export function ReaderWorkspace({
                 }}
               >
                 <div className="chat-message-role">{message.role === "assistant" ? "AI" : "你"}</div>
-                <div className="chat-message-content">
-                  {message.role === "assistant" ? (
+                <div
+                  className={
+                    message.isStreaming
+                      ? "chat-message-content chat-message-content-streaming"
+                      : "chat-message-content"
+                  }
+                >
+                  {message.mode === "agent" && message.agentState ? (
+                    <div className="agent-chat-card">
+                      <div
+                        className={
+                          message.agentState.status === "planning" || message.agentState.status === "previewing" || message.agentState.status === "executing"
+                            ? "agent-chat-summary agent-chat-summary-thinking"
+                            : "agent-chat-summary"
+                        }
+                      >
+                        {message.agentState.summary}
+                      </div>
+                      <div className="agent-chat-timeline">
+                        {message.agentState.timeline.map((item) => (
+                          <details key={item.id} className={`agent-chat-step agent-chat-step-${item.status}`}>
+                            <summary className="agent-chat-step-summary">
+                              <span className="agent-chat-step-title">{item.title}</span>
+                              <span className="agent-chat-step-status">{renderAgentStepStatus(item.status)}</span>
+                            </summary>
+                            <div className="agent-chat-step-body">
+                              <div>{item.summary}</div>
+                              {item.detail ? <pre className="agent-chat-step-detail">{item.detail}</pre> : null}
+                            </div>
+                          </details>
+                        ))}
+                      </div>
+                      {message.agentState.result ? (
+                        <div className="agent-chat-result">
+                          <div className="agent-chat-result-title">结果</div>
+                          <MarkdownArticle content={message.agentState.result} className="markdown-article-chat" />
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : message.role === "assistant" ? (
                     message.isStreaming && !message.content.trim() ? (
                       <span className="chat-message-typing">正在输入…</span>
                     ) : (
@@ -768,46 +1078,36 @@ export function ReaderWorkspace({
             rows={1}
             value={chatDraft}
             onChange={(event) => setChatDraft(event.target.value)}
-            placeholder="输入问题"
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.shiftKey) {
+                return;
+              }
+              event.preventDefault();
+              handleSendChat();
+            }}
+            placeholder={chatMode === "agent" ? "输入要 Agent 执行的自然语言任务" : "输入问题"}
           />
           <div className="chat-input-footer">
-            <div className="chat-input-footer-spacer" />
+            <div className="chat-mode-switch">
+              <button
+                className={chatMode === "ask" ? "chat-mode-button chat-mode-button-active" : "chat-mode-button"}
+                onClick={() => setChatMode("ask")}
+              >
+                Ask
+              </button>
+              <button
+                className={chatMode === "agent" ? "chat-mode-button chat-mode-button-active" : "chat-mode-button"}
+                onClick={() => setChatMode("agent")}
+              >
+                Agent
+              </button>
+            </div>
             <button
               className="send-button"
-              disabled={chatMutation.isPending}
-              onClick={() => {
-                const nextQuestion = chatDraft.trim() || (referencedBlock ? "请直接解析这个知识块。" : "请直接回答用户问题。");
-                const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-                const nextHistory = chatMessages
-                  .filter((item) => item.role === "user" || item.role === "assistant")
-                  .slice(-6)
-                  .map((item) => ({ role: item.role, content: item.content }));
-
-                currentRequestIdRef.current = requestId;
-                setChatMessages((current) => [
-                  ...current,
-                  {
-                    id: `user-${Date.now()}`,
-                    role: "user",
-                    content: nextQuestion
-                  },
-                  {
-                    id: `assistant-${requestId}`,
-                    role: "assistant",
-                    content: "",
-                    isStreaming: true
-                  }
-                ]);
-                setChatDraft("");
-                chatMutation.mutate({
-                  blockId: referencedBlock?.blockId,
-                  question: nextQuestion,
-                  requestId,
-                  history: nextHistory
-                });
-              }}
+              disabled={chatMutation.isPending || agentRunning}
+              onClick={handleSendChat}
             >
-              发送
+              {agentRunning ? "执行中" : "发送"}
             </button>
           </div>
         </div>
@@ -830,6 +1130,122 @@ export function ReaderWorkspace({
 
 function buildReferenceTitle(block: Block) {
   return block.title ?? block.headingPath.at(-1) ?? `Block ${block.orderIndex + 1}`;
+}
+
+function renderAgentStepStatus(status: AgentTimelineItem["status"]) {
+  switch (status) {
+    case "running":
+      return "进行中";
+    case "completed":
+      return "已完成";
+    case "failed":
+      return "失败";
+    default:
+      return "待执行";
+  }
+}
+
+function buildAgentExecutionSummary(audit: GetAgentAuditOutput) {
+  const lastLog = audit.logs.at(-1);
+  if (audit.task.status === "completed") {
+    return "任务执行完成。";
+  }
+  if (audit.task.status === "failed") {
+    return lastLog?.message ?? "任务执行失败。";
+  }
+  return lastLog?.message ?? "正在执行任务。";
+}
+
+function buildAgentExecutionDetail(audit: GetAgentAuditOutput) {
+  return audit.logs
+    .slice(-12)
+    .map((log) => `[${new Date(log.createdAt).toLocaleTimeString()}] ${log.level.toUpperCase()} ${log.message}`)
+    .join("\n");
+}
+
+function buildAgentResultText(audit: GetAgentAuditOutput) {
+  const actions = summarizeAgentFileActions(audit);
+  if (actions.length === 1) {
+    return `你的任务已经完成。${actions[0]}。如果还需要我继续处理别的资料，可以直接告诉我。`;
+  }
+  if (actions.length > 1) {
+    return `你的任务已经完成。我这次做了这些操作：\n${actions.map((item, index) => `${index + 1}. ${item}`).join("\n")}\n\n如果还需要我继续处理别的资料，可以直接告诉我。`;
+  }
+  const lastInfo = [...audit.logs].reverse().find((log) => log.level === "info");
+  return `你的任务已经完成。${lastInfo?.message ?? "这次没有需要额外说明的文件变更。"} 如果还需要我继续处理别的资料，可以直接告诉我。`;
+}
+
+function buildAgentFailureText(audit: GetAgentAuditOutput) {
+  const lastError = [...audit.logs].reverse().find((log) => log.level === "error");
+  return lastError?.message ?? "任务执行失败。";
+}
+
+function summarizeAgentFileActions(audit: GetAgentAuditOutput) {
+  const taskText = audit.task.taskText;
+  const actionLines: string[] = [];
+
+  for (const snapshot of audit.snapshots) {
+    const filePath = snapshot.filePath;
+    if (!filePath) {
+      continue;
+    }
+
+    const snapshotPayload = safeParseJson(snapshot.snapshotJson);
+    const existsBefore = snapshotPayload?.existsBefore;
+    const readablePath = formatAgentDisplayPath(filePath);
+
+    if ((taskText.includes("删除") || taskText.includes("移除")) && existsBefore === true) {
+      actionLines.push(`删除了文件 ${readablePath}`);
+      continue;
+    }
+
+    if ((taskText.includes("新建") || taskText.includes("创建") || taskText.includes("生成")) && existsBefore === false) {
+      actionLines.push(`新增了文件 ${readablePath}`);
+      continue;
+    }
+
+    if (existsBefore === false) {
+      actionLines.push(`新增了文件 ${readablePath}`);
+      continue;
+    }
+
+    actionLines.push(`更新了文件 ${readablePath}`);
+  }
+
+  return [...new Set(actionLines)].slice(0, 8);
+}
+
+function formatAgentDisplayPath(input: string) {
+  const normalized = input
+    .replace(/^\/\?\//, "")
+    .replace(/^\\\\\?\\/, "")
+    .replaceAll("\\", "/");
+
+  const projectMatch = normalized.match(/\/projects\/[^/]+\/(.+)$/i);
+  if (projectMatch?.[1]) {
+    return projectMatch[1];
+  }
+
+  const sourceMatch = normalized.match(/\/(source|normalized|blocks|notes|exports)\/.+$/i);
+  if (sourceMatch) {
+    return normalized.slice(sourceMatch.index! + 1);
+  }
+
+  return normalized;
+}
+
+function safeParseJson(input: string) {
+  try {
+    return JSON.parse(input) as { existsBefore?: boolean };
+  } catch {
+    return null;
+  }
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
 }
 
 function getDocumentDisplayName(document: Document) {

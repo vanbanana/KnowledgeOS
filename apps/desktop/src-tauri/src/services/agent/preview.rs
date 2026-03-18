@@ -64,18 +64,22 @@ fn build_preview_item(
                 before_summary = Some(document.source_path);
             }
         }
-        "rename_file" | "move_file" => {
+        "rename_file" | "move_file" | "delete_file" => {
             if let Some(document_id) = args.get("documentId").and_then(Value::as_str)
                 && let Some(document) = get_document(&app_state.db, document_id).map_err(|error| error.to_string())?
             {
                 label = document.title.unwrap_or(document.document_id.clone());
                 target_ref = Some(format!("document:{document_id}"));
                 before_summary = Some(document.source_path.clone());
-                after_summary = args
-                    .get("newName")
-                    .and_then(Value::as_str)
-                    .map(|value| format!("将改为 {value}"))
-                    .or_else(|| args.get("targetPath").and_then(Value::as_str).map(|value| value.to_string()));
+                after_summary = if step.tool_name == "delete_file" {
+                    Some("将删除该文件及其索引记录".to_string())
+                } else {
+                    args
+                        .get("newName")
+                        .and_then(Value::as_str)
+                        .map(|value| format!("将改为 {value}"))
+                        .or_else(|| args.get("targetPath").and_then(Value::as_str).map(|value| value.to_string()))
+                };
             }
         }
         "update_markdown" => {
@@ -89,6 +93,26 @@ fn build_preview_item(
                     .get("contentMd")
                     .and_then(Value::as_str)
                     .map(truncate_text);
+            } else {
+                label = args
+                    .get("path")
+                    .and_then(Value::as_str)
+                    .map(|value| format!("将写入 {value}"))
+                    .unwrap_or_else(|| "将写入新的 Markdown 文档".to_string());
+                target_ref = args
+                    .get("sourceDocumentId")
+                    .and_then(Value::as_str)
+                    .map(|value| format!("document:{value}"));
+                after_summary = if args.get("contentMode").and_then(Value::as_str) == Some("generate") {
+                    args.get("instruction")
+                        .and_then(Value::as_str)
+                        .map(|value| format!("模型将按该指令生成内容：{}", truncate_text(value)))
+                } else {
+                    args.get("contentMd")
+                        .or_else(|| args.get("content"))
+                        .and_then(Value::as_str)
+                        .map(truncate_text)
+                };
             }
         }
         "merge_cards" => {

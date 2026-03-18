@@ -47,8 +47,10 @@ pub fn read_normalized_result(
         .clone()
         .ok_or_else(|| "文档缺少 manifest 路径".to_string())?;
 
-    let markdown = fs::read_to_string(markdown_path).map_err(|error| error.to_string())?;
-    let manifest_json = fs::read_to_string(manifest_path).map_err(|error| error.to_string())?;
+    let markdown =
+        fs::read_to_string(normalize_filesystem_path(&markdown_path)).map_err(|error| error.to_string())?;
+    let manifest_json =
+        fs::read_to_string(normalize_filesystem_path(&manifest_path)).map_err(|error| error.to_string())?;
     let manifest = serde_json::from_str::<NormalizedManifest>(&manifest_json)
         .map_err(|error| error.to_string())?;
 
@@ -57,6 +59,10 @@ pub fn read_normalized_result(
         markdown,
         manifest,
     })
+}
+
+fn normalize_filesystem_path(path: &str) -> PathBuf {
+    PathBuf::from(path.trim_start_matches(r"\\?\"))
 }
 
 pub fn write_normalized_result(

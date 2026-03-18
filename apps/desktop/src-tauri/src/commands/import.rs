@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::services::import::{
-    DocumentRecord, ImportErrorRecord, delete_document, get_all_documents, import_files,
+    DocumentRecord, ImportErrorRecord, cleanup_unreadable_documents, delete_document, get_all_documents, import_files,
     list_documents,
 };
 use crate::services::project::get_project;
@@ -105,5 +105,6 @@ pub fn delete_document_command(
 }
 
 pub fn list_all_documents_for_bootstrap(state: &AppState) -> Result<Vec<DocumentRecord>, String> {
+    cleanup_unreadable_documents(&state.db)?;
     get_all_documents(&state.db).map_err(|error| error.to_string())
 }

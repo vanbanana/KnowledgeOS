@@ -18,6 +18,7 @@ export function AgentWorkspace({ currentProject }: AgentWorkspaceProps) {
   const queryClient = useQueryClient();
   const [taskText, setTaskText] = useState("");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const tasksQuery = useQuery({
     queryKey: ["agent-tasks", currentProject?.projectId],
@@ -46,36 +47,59 @@ export function AgentWorkspace({ currentProject }: AgentWorkspaceProps) {
   const planMutation = useMutation({
     mutationFn: planAgentTask,
     onSuccess: async (result) => {
+      setActionError(null);
       setSelectedTaskId(result.task.taskId);
       setTaskText("");
       await queryClient.invalidateQueries({ queryKey: ["agent-tasks", currentProject?.projectId] });
+    },
+    onError: (error: Error) => {
+      setActionError(error.message);
     }
   });
 
   const previewMutation = useMutation({
     mutationFn: generateAgentPreview,
     onSuccess: async (result) => {
+      setActionError(null);
       setSelectedTaskId(result.task.taskId);
       await queryClient.invalidateQueries({ queryKey: ["agent-tasks", currentProject?.projectId] });
       await queryClient.invalidateQueries({ queryKey: ["agent-audit", result.task.taskId] });
+    },
+    onError: (error: Error) => {
+      setActionError(error.message);
     }
   });
 
   const confirmMutation = useMutation({
     mutationFn: confirmAgentTask,
     onSuccess: async (result) => {
+      setActionError(null);
       setSelectedTaskId(result.task.taskId);
+      await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
       await queryClient.invalidateQueries({ queryKey: ["agent-tasks", currentProject?.projectId] });
       await queryClient.invalidateQueries({ queryKey: ["agent-audit", result.task.taskId] });
+    },
+    onError: async (error: Error) => {
+      setActionError(error.message);
+      if (currentTask?.taskId) {
+        await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
+        await queryClient.invalidateQueries({ queryKey: ["agent-tasks", currentProject?.projectId] });
+        await queryClient.invalidateQueries({ queryKey: ["agent-audit", currentTask.taskId] });
+      }
     }
   });
 
   const rollbackMutation = useMutation({
     mutationFn: rollbackAgentTask,
     onSuccess: async (result) => {
+      setActionError(null);
       setSelectedTaskId(result.task.taskId);
+      await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
       await queryClient.invalidateQueries({ queryKey: ["agent-tasks", currentProject?.projectId] });
       await queryClient.invalidateQueries({ queryKey: ["agent-audit", result.task.taskId] });
+    },
+    onError: (error: Error) => {
+      setActionError(error.message);
     }
   });
 
@@ -163,6 +187,7 @@ export function AgentWorkspace({ currentProject }: AgentWorkspaceProps) {
             </div>
 
             <div className="workspace-panel-title">计划</div>
+            {actionError ? <div className="agent-error-banner">{actionError}</div> : null}
             <div className="workspace-list workspace-list-static">
               {currentPlan?.steps?.length ? (
                 currentPlan.steps.map((step: { stepId: string; title: string; toolName: string; riskLevel: string; reason: string; argumentsJson: string }) => (

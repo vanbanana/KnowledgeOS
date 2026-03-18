@@ -71,6 +71,46 @@ pub fn chunk_document(
     Ok(blocks)
 }
 
+pub fn rebuild_missing_blocks(
+    connection: &Connection,
+    project_root: &Path,
+    document_id: &str,
+) -> Result<Vec<BlockRecord>, String> {
+    let document = get_document(connection, document_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "文档不存在".to_string())?;
+
+    let normalized_path = document
+        .normalized_md_path
+        .as_ref()
+        .ok_or_else(|| "缺少 normalized markdown".to_string())?;
+    if !normalize_filesystem_path(normalized_path).exists() {
+        return Err("normalized markdown 文件不存在".to_string());
+    }
+
+    let normalized = read_normalized_result(&document)?;
+    let structured = chunk_by_structure(&normalized.markdown, &normalized.manifest);
+    let draft_blocks = rebalance_blocks(structured);
+    let blocks = persist_blocks(connection, project_root, &document, draft_blocks)?;
+
+    let current_status = DocumentStatus::try_from(document.parse_status.as_str())?;
+    if current_status == DocumentStatus::Normalized {
+        transition_document_status(
+            connection,
+            document_id,
+            DocumentStatus::Normalized,
+            DocumentStatus::Chunked,
+            None,
+        )?;
+    }
+
+    Ok(blocks)
+}
+
+fn normalize_filesystem_path(path: &str) -> std::path::PathBuf {
+    std::path::PathBuf::from(path.trim_start_matches(r"\\?\"))
+}
+
 pub fn persist_blocks(
     connection: &Connection,
     project_root: &Path,

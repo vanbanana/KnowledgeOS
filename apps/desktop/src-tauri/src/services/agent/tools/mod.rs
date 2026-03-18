@@ -14,6 +14,7 @@ pub fn tool_registry() -> Vec<AgentToolDefinition> {
         build_tool("read_document", "读取文档或块内容", false),
         build_tool("rename_file", "重命名项目内文件", true),
         build_tool("move_file", "移动项目内文件", true),
+        build_tool("delete_file", "删除项目内文件", true),
         build_tool("update_markdown", "更新文档块或 markdown 内容", true),
         build_tool("merge_cards", "合并两张卡片", true),
         build_tool("update_tags", "更新卡片标签", true),

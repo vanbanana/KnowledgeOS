@@ -266,6 +266,7 @@ export const agentToolNameSchema = z.enum([
   "read_document",
   "rename_file",
   "move_file",
+  "delete_file",
   "update_markdown",
   "merge_cards",
   "update_tags",
