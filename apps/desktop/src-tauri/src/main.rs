@@ -24,7 +24,8 @@ use commands::block::{
 };
 use commands::card::{list_cards_command, save_card_command, update_card_command};
 use commands::explain::{
-    explain_block_command, list_block_explanations_command, list_explain_templates_command,
+    explain_block_command, list_block_explanations_command,
+    list_document_block_explanations_command, list_explain_templates_command,
     regenerate_block_explanation_command,
 };
 use commands::graph::{
@@ -40,6 +41,10 @@ use commands::reader::{
     chat_with_block_command, get_source_preview_command, upsert_reader_state_command,
 };
 use commands::search::{hybrid_search_project_command, search_project_command};
+use commands::studio::{
+    create_studio_artifact_command, generate_studio_artifact_command, get_studio_artifact_command,
+    list_studio_artifacts_command,
+};
 use commands::window::{
     close_window_command, minimize_window_command, start_window_drag_command,
     toggle_maximize_window_command,
@@ -70,6 +75,7 @@ fn main() {
             explain_block_command,
             regenerate_block_explanation_command,
             list_block_explanations_command,
+            list_document_block_explanations_command,
             list_explain_templates_command,
             save_card_command,
             list_cards_command,
@@ -91,6 +97,10 @@ fn main() {
             rollback_agent_task_command,
             list_agent_task_logs_command,
             get_agent_audit_command,
+            create_studio_artifact_command,
+            generate_studio_artifact_command,
+            list_studio_artifacts_command,
+            get_studio_artifact_command,
             start_window_drag_command,
             minimize_window_command,
             toggle_maximize_window_command,

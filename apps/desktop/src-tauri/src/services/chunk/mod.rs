@@ -4,12 +4,14 @@ pub mod structure_chunker;
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 use rusqlite::{Connection, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
+use crate::ai::model_adapter::{ModelRequest, build_model_adapter};
+use crate::config::AppConfig;
 use crate::services::block::BlockRecord;
 use crate::services::import::{
     DocumentRecord, DocumentStatus, get_document, transition_document_status,
@@ -31,7 +33,25 @@ pub struct DraftBlock {
     pub parent_lookup_key: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChunkResponse {
+    blocks: Vec<AiChunkBlock>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiChunkBlock {
+    title: Option<String>,
+    #[serde(default)]
+    heading_path: Vec<String>,
+    block_type: Option<String>,
+    content_md: String,
+    source_anchor: Option<String>,
+}
+
 pub fn chunk_document(
+    config: &AppConfig,
     connection: &Connection,
     project_root: &Path,
     document_id: &str,
@@ -58,13 +78,24 @@ pub fn chunk_document(
     }
 
     let normalized = read_normalized_result(&current_document)?;
-    let structured = chunk_by_structure(&normalized.markdown, &normalized.manifest);
-    let draft_blocks = rebalance_blocks(structured);
+    let chunking_from = if config.model_settings.provider == "mock" {
+        DocumentStatus::Normalized
+    } else {
+        transition_document_status(
+            connection,
+            document_id,
+            DocumentStatus::Normalized,
+            DocumentStatus::AiChunking,
+            None,
+        )?;
+        DocumentStatus::AiChunking
+    };
+    let draft_blocks = build_draft_blocks(config, &normalized);
     let blocks = persist_blocks(connection, project_root, &current_document, draft_blocks)?;
     transition_document_status(
         connection,
         document_id,
-        DocumentStatus::Normalized,
+        chunking_from,
         DocumentStatus::Chunked,
         None,
     )?;
@@ -109,6 +140,189 @@ pub fn rebuild_missing_blocks(
 
 fn normalize_filesystem_path(path: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(path.trim_start_matches(r"\\?\"))
+}
+
+fn build_draft_blocks(config: &AppConfig, normalized: &NormalizeResult) -> Vec<DraftBlock> {
+    if let Ok(ai_blocks) = build_draft_blocks_with_ai(config, normalized) {
+        return rebalance_blocks(ai_blocks);
+    }
+
+    let structured = chunk_by_structure(&normalized.markdown, &normalized.manifest);
+    rebalance_blocks(structured)
+}
+
+fn build_draft_blocks_with_ai(
+    config: &AppConfig,
+    normalized: &NormalizeResult,
+) -> Result<Vec<DraftBlock>, String> {
+    if config.model_settings.provider == "mock" {
+        return Err("mock provider 跳过 AI 分块".to_string());
+    }
+
+    let prompt_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("packages")
+        .join("prompt-templates")
+        .join("import_semantic_chunk_system.md");
+    let system_prompt = fs::read_to_string(prompt_path).map_err(|error| error.to_string())?;
+    let adapter = build_model_adapter(&config.model_settings)?;
+    let prompt = format!(
+        "文档标题：{}\n现有章节：{}\n\n请对下面的 Markdown 做语义分块：\n{}",
+        normalized.manifest.title,
+        serde_json::to_string_pretty(&normalized.manifest.sections).map_err(|error| error.to_string())?,
+        normalized.markdown
+    );
+    let response = adapter.complete(&ModelRequest {
+        task_type: "import.chunk".to_string(),
+        provider: config.model_settings.provider.clone(),
+        model: config.model_settings.tool_model.clone(),
+        system_prompt,
+        prompt,
+        output_format: "json".to_string(),
+        context_blocks: Vec::new(),
+        metadata_json: "{}".to_string(),
+        temperature: 0.1,
+        max_output_tokens: 8000,
+    })?;
+
+    let payload: AiChunkResponse =
+        serde_json::from_str(&response.output_text).map_err(|error| error.to_string())?;
+    if payload.blocks.is_empty() {
+        return Err("AI 分块返回了空结果".to_string());
+    }
+
+    let total_input_chars = normalized.markdown.chars().count();
+    let total_output_chars = payload
+        .blocks
+        .iter()
+        .map(|block| block.content_md.chars().count())
+        .sum::<usize>();
+    if total_output_chars < (total_input_chars / 2).max(120) {
+        return Err("AI 分块结果过短，已回退到规则分块".to_string());
+    }
+
+    let draft_blocks = payload
+        .blocks
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, block)| {
+            let content_md = block.content_md.trim().to_string();
+            if content_md.is_empty() {
+                return None;
+            }
+            let heading_path = if block.heading_path.is_empty() {
+                vec![
+                    block
+                        .title
+                        .clone()
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or_else(|| normalized.manifest.title.clone()),
+                ]
+            } else {
+                block.heading_path
+            };
+            let parent_lookup_key = if heading_path.len() > 1 {
+                Some(heading_path[..heading_path.len() - 1].join(" > "))
+            } else {
+                None
+            };
+            Some(DraftBlock {
+                title: block.title.filter(|value| !value.trim().is_empty()),
+                heading_path,
+                depth: 0,
+                block_type: block.block_type.unwrap_or_else(|| "section".to_string()),
+                content_md,
+                source_anchor: Some(
+                    block
+                        .source_anchor
+                        .filter(|value| !value.trim().is_empty())
+                        .unwrap_or_else(|| format!("semantic-block-{}", index + 1)),
+                ),
+                parent_lookup_key,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    if draft_blocks.is_empty() {
+        return Err("AI 分块过滤后为空".to_string());
+    }
+    validate_ai_draft_blocks(normalized, &draft_blocks)?;
+
+    Ok(draft_blocks)
+}
+
+fn validate_ai_draft_blocks(
+    normalized: &NormalizeResult,
+    draft_blocks: &[DraftBlock],
+) -> Result<(), String> {
+    if draft_blocks.is_empty() {
+        return Err("AI 分块结果为空".to_string());
+    }
+
+    let normalized_source = normalize_compare_text(&normalized.markdown);
+    if normalized_source.len() < 80 {
+        return Ok(());
+    }
+
+    let mut cursor = 0usize;
+    let mut matched_len = 0usize;
+
+    for draft in draft_blocks {
+        if draft.heading_path.is_empty() {
+            return Err("AI 分块缺少 heading_path".to_string());
+        }
+        let block_text = normalize_compare_text(&draft.content_md);
+        if block_text.is_empty() {
+            return Err("AI 分块存在空内容".to_string());
+        }
+
+        if let Some((next_cursor, hit_len)) = find_in_order(&normalized_source, cursor, &block_text) {
+            cursor = next_cursor;
+            matched_len += hit_len;
+            continue;
+        }
+
+        return Err("AI 分块结果与原文顺序不一致，已回退到规则分块".to_string());
+    }
+
+    let coverage = matched_len as f64 / normalized_source.len() as f64;
+    if coverage < 0.58 {
+        return Err("AI 分块覆盖率过低，已回退到规则分块".to_string());
+    }
+
+    Ok(())
+}
+
+fn find_in_order(source: &str, cursor: usize, content: &str) -> Option<(usize, usize)> {
+    if content.is_empty() {
+        return Some((cursor, 0));
+    }
+
+    let haystack = source.get(cursor..)?;
+    if let Some(position) = haystack.find(content) {
+        let next_cursor = cursor + position + content.len();
+        return Some((next_cursor, content.len()));
+    }
+
+    let prefix: String = content.chars().take(32).collect();
+    if prefix.len() >= 16
+        && let Some(position) = haystack.find(&prefix)
+    {
+        let next_cursor = cursor + position + prefix.len();
+        return Some((next_cursor, prefix.len()));
+    }
+
+    None
+}
+
+fn normalize_compare_text(value: &str) -> String {
+    value
+        .chars()
+        .filter(|character| character.is_alphanumeric() || !character.is_ascii_whitespace() && !character.is_ascii_punctuation())
+        .flat_map(|character| character.to_lowercase())
+        .collect()
 }
 
 pub fn persist_blocks(

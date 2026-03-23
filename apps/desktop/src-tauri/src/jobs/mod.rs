@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::config::AppConfig;
 use crate::services::chunk::chunk_document;
 use crate::services::import::{DocumentStatus, get_document, transition_document_status};
-use crate::services::normalize::write_normalized_result;
+use crate::services::normalize::{refine_normalized_result, write_normalized_result};
 use crate::sidecar::parse_document;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,7 +205,7 @@ pub fn run_job(
 fn execute_job(connection: &Connection, config: &AppConfig, job: &JobRecord) -> Result<(), String> {
     match job.kind.as_str() {
         "document.parse" => execute_document_parse_job(connection, config, &job.payload_json),
-        "document.chunk" => execute_document_chunk_job(connection, &job.payload_json),
+        "document.chunk" => execute_document_chunk_job(connection, config, &job.payload_json),
         _ => Ok(()),
     }
 }
@@ -242,11 +242,25 @@ fn execute_document_parse_job(
             return Err(error);
         }
     };
-    if !normalized.ok {
+    let refined_from = if config.model_settings.provider == "mock" {
+        DocumentStatus::Parsing
+    } else {
         transition_document_status(
             connection,
             &payload.document_id,
             DocumentStatus::Parsing,
+            DocumentStatus::AiNormalizing,
+            None,
+        )?;
+        DocumentStatus::AiNormalizing
+    };
+    let normalized = refine_normalized_result(config, &document.source_type, normalized.clone())
+        .unwrap_or(normalized);
+    if !normalized.ok {
+        transition_document_status(
+            connection,
+            &payload.document_id,
+            refined_from,
             DocumentStatus::Failed,
             Some("parser worker 返回失败"),
         )?;
@@ -260,7 +274,7 @@ fn execute_document_parse_job(
         let _ = transition_document_status(
             connection,
             &payload.document_id,
-            DocumentStatus::Parsing,
+            refined_from,
             DocumentStatus::Failed,
             Some(&error),
         );
@@ -269,7 +283,7 @@ fn execute_document_parse_job(
     transition_document_status(
         connection,
         &payload.document_id,
-        DocumentStatus::Parsing,
+        refined_from,
         DocumentStatus::Normalized,
         None,
     )?;
@@ -282,18 +296,26 @@ fn execute_document_parse_job(
     Ok(())
 }
 
-fn execute_document_chunk_job(connection: &Connection, payload_json: &str) -> Result<(), String> {
+fn execute_document_chunk_job(
+    connection: &Connection,
+    config: &AppConfig,
+    payload_json: &str,
+) -> Result<(), String> {
     let payload: DocumentChunkPayload =
         serde_json::from_str(payload_json).map_err(|error| error.to_string())?;
     let project_root = PathBuf::from(&payload.project_root);
 
-    match chunk_document(connection, &project_root, &payload.document_id) {
+    match chunk_document(config, connection, &project_root, &payload.document_id) {
         Ok(_) => Ok(()),
         Err(error) => {
+            let current_status = get_document(connection, &payload.document_id)
+                .map_err(|inner| inner.to_string())?
+                .and_then(|document| DocumentStatus::try_from(document.parse_status.as_str()).ok())
+                .unwrap_or(DocumentStatus::Normalized);
             let _ = transition_document_status(
                 connection,
                 &payload.document_id,
-                DocumentStatus::Normalized,
+                current_status,
                 DocumentStatus::Failed,
                 Some(&error),
             );

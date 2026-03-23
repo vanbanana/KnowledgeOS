@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::db::initialize_database;
 use crate::jobs::{
     JobRecord, cancel_job, enqueue_job, list_jobs as query_jobs, retry_job, run_job,
 };
@@ -72,12 +73,23 @@ pub fn list_jobs(
 }
 
 #[tauri::command]
-pub fn run_job_command(
+pub async fn run_job_command(
     payload: JobCommandPayload,
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<JobCommandResponse, String> {
-    let app_state = state.lock().map_err(|error| error.to_string())?;
-    let job = run_job(&app_state.db, &app_state.config, &payload.job_id)?;
+    let config = {
+        let app_state = state.lock().map_err(|error| error.to_string())?;
+        app_state.config.clone()
+    };
+    let job_id = payload.job_id.clone();
+    let job = tauri::async_runtime::spawn_blocking(move || {
+        let migrations_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let connection = initialize_database(&config.database_path, &migrations_dir)
+            .map_err(|error| error.to_string())?;
+        run_job(&connection, &config, &job_id)
+    })
+    .await
+    .map_err(|error| error.to_string())??;
     Ok(JobCommandResponse { job })
 }
 

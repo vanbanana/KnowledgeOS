@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 
+use crate::db::initialize_database;
 use crate::services::import::{
     DocumentRecord, ImportErrorRecord, cleanup_unreadable_documents, delete_document, get_all_documents, import_files,
     list_documents,
@@ -53,20 +54,32 @@ pub struct DeleteDocumentResponse {
 }
 
 #[tauri::command]
-pub fn import_files_command(
+pub async fn import_files_command(
     payload: ImportFilesPayload,
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<ImportFilesResponse, String> {
-    let app_state = state.lock().map_err(|error| error.to_string())?;
-    let project = get_project(&app_state.db, &payload.project_id)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "项目不存在".to_string())?;
-    let result = import_files(
-        &app_state.db,
-        Path::new(&project.root_path),
-        &payload.project_id,
-        &payload.paths,
-    )?;
+    let config = {
+        let app_state = state.lock().map_err(|error| error.to_string())?;
+        app_state.config.clone()
+    };
+    let project_id = payload.project_id.clone();
+    let paths = payload.paths.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let migrations_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations");
+        let connection = initialize_database(&config.database_path, &migrations_dir)
+            .map_err(|error| error.to_string())?;
+        let project = get_project(&connection, &project_id)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "项目不存在".to_string())?;
+        import_files(
+            &connection,
+            Path::new(&project.root_path),
+            &project_id,
+            &paths,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())??;
 
     Ok(ImportFilesResponse {
         documents: result.documents,

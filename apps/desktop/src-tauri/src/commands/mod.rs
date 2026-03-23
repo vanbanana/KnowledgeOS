@@ -9,4 +9,5 @@ pub mod jobs;
 pub mod project;
 pub mod reader;
 pub mod search;
+pub mod studio;
 pub mod window;

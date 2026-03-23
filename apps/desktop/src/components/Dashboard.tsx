@@ -19,7 +19,12 @@ import {
 import { AgentWorkspace } from "./AgentWorkspace";
 import { CardsWorkspace } from "./CardsWorkspace";
 import { GraphWorkspace } from "./GraphWorkspace";
+import { KnowledgeGraphWorkspace } from "./KnowledgeGraphWorkspace";
+import { MindMapWorkspace } from "./MindMapWorkspace";
+import { PracticeSetWorkspace } from "./PracticeSetWorkspace";
+import { PresentationWorkspace } from "./PresentationWorkspace";
 import { ReaderWorkspace } from "./ReaderWorkspace";
+import { StudioWorkspace } from "./StudioWorkspace";
 
 interface DashboardProps {
   bootstrap: {
@@ -38,19 +43,34 @@ interface ProjectContextMenuState {
   y: number;
 }
 
+interface ImportProgressState {
+  total: number;
+  completed: number;
+  failed: number;
+  percent: number;
+  currentStage: string;
+  summary: string;
+}
+
 export function Dashboard({ bootstrap }: DashboardProps) {
   const queryClient = useQueryClient();
   const [importPaths, setImportPaths] = useState<string[]>([]);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
+  const [importProgress, setImportProgress] = useState<ImportProgressState | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(bootstrap.projects[0]?.projectId ?? null);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
-  const [currentView, setCurrentView] = useState<"项目" | "阅读器" | "卡片" | "图谱" | "Agent">("阅读器");
+  const [currentView, setCurrentView] = useState<"项目" | "阅读器" | "Studio" | "知识网络" | "练习题" | "思维导图" | "演示文稿" | "卡片" | "图谱" | "Agent">("阅读器");
+  const [selectedKnowledgeGraphArtifactId, setSelectedKnowledgeGraphArtifactId] = useState<string | null>(null);
+  const [selectedPracticeSetArtifactId, setSelectedPracticeSetArtifactId] = useState<string | null>(null);
+  const [selectedMindMapArtifactId, setSelectedMindMapArtifactId] = useState<string | null>(null);
+  const [selectedPresentationArtifactId, setSelectedPresentationArtifactId] = useState<string | null>(null);
   const [searchText, setSearchText] = useState("");
   const [isImportDragActive, setIsImportDragActive] = useState(false);
   const [projectContextMenu, setProjectContextMenu] = useState<ProjectContextMenuState | null>(null);
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>([]);
+  const [paperAnalyzeTrigger, setPaperAnalyzeTrigger] = useState(0);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentProject =
@@ -135,6 +155,7 @@ export function Dashboard({ bootstrap }: DashboardProps) {
         projectId: currentProject.projectId,
         paths
       });
+      setImportProgress(buildImportProgress(result.documents));
       await processImportPipeline(currentProject.projectId, result.documents.map((item) => item.documentId));
       return result;
     },
@@ -219,25 +240,36 @@ export function Dashboard({ bootstrap }: DashboardProps) {
 
   async function processImportPipeline(projectId: string, importedDocumentIds: string[]) {
     await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
-    for (let round = 0; round < 8; round += 1) {
-      const jobResult = await listJobs();
+    for (let round = 0; round < 24; round += 1) {
+      const [documentsResult, jobResult] = await Promise.all([listDocuments(projectId), listJobs()]);
+      const importingDocuments = documentsResult.documents.filter((item) => importedDocumentIds.includes(item.documentId));
+      setImportProgress(buildImportProgress(importingDocuments));
+
       const pendingJobs = jobResult.jobs.filter(
         (job) =>
           job.status === "pending"
           && (job.kind === "document.parse" || job.kind === "document.chunk")
-          && job.payloadJson.includes(projectId)
           && importedDocumentIds.some((documentId) => job.payloadJson.includes(documentId))
       );
-      if (pendingJobs.length === 0) {
+      const allFinished = importingDocuments.every((item) =>
+        ["chunked", "indexed", "ready", "failed"].includes(item.parseStatus)
+      );
+
+      if (pendingJobs.length === 0 && allFinished) {
         break;
       }
-      for (const job of pendingJobs) {
-        await runJob({ jobId: job.jobId });
+
+      if (pendingJobs.length > 0) {
+        await Promise.allSettled(pendingJobs.map((job) => runJob({ jobId: job.jobId })));
+      } else {
+        await new Promise((resolve) => window.setTimeout(resolve, 240));
       }
       await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
     }
 
     const documentsResult = await listDocuments(projectId);
+    const importingDocuments = documentsResult.documents.filter((item) => importedDocumentIds.includes(item.documentId));
+    setImportProgress(buildImportProgress(importingDocuments));
     const latestImportedDocument = documentsResult.documents.find((item) => importedDocumentIds.includes(item.documentId)) ?? null;
     if (latestImportedDocument) {
       setSelectedDocumentId(latestImportedDocument.documentId);
@@ -385,11 +417,27 @@ export function Dashboard({ bootstrap }: DashboardProps) {
           <button className={currentView === "阅读器" ? "icon-slot icon-slot-active" : "icon-slot"} onClick={() => setCurrentView("阅读器")} aria-label="阅读器">
             <SvgDocumentIcon />
           </button>
+          <button
+            className="icon-slot"
+            onClick={() => {
+              setCurrentView("阅读器");
+              if (currentDocument) {
+                setPaperAnalyzeTrigger((current) => current + 1);
+              }
+            }}
+            aria-label="全文论文解析"
+            title="全文论文解析"
+          >
+            <SvgPaperExplainIcon />
+          </button>
           <button className={currentView === "卡片" ? "icon-slot icon-slot-active" : "icon-slot"} onClick={() => setCurrentView("卡片")} aria-label="卡片">
             <SvgCardsIcon />
           </button>
           <button className={currentView === "图谱" ? "icon-slot icon-slot-active" : "icon-slot"} onClick={() => setCurrentView("图谱")} aria-label="图谱">
             <SvgGraphIcon />
+          </button>
+          <button className={currentView === "Studio" ? "icon-slot icon-slot-active" : "icon-slot"} onClick={() => setCurrentView("Studio")} aria-label="Studio">
+            <SvgStudioIcon />
           </button>
           <div className="sidebar-icons-spacer" />
           <button className={currentView === "Agent" ? "icon-slot icon-slot-active" : "icon-slot"} onClick={() => setCurrentView("Agent")} aria-label="Agent">
@@ -576,19 +624,26 @@ export function Dashboard({ bootstrap }: DashboardProps) {
               }}
             >
               <div className="import-dropzone-title">
-                {importFilesMutation.isPending ? "正在转换资料" : "点击选择资料"}
+                {importFilesMutation.isPending ? importProgress?.currentStage ?? "正在转换资料" : "点击选择资料"}
               </div>
               <div className="import-dropzone-subtitle">
                 {importFilesMutation.isPending
-                  ? "系统正在自动整理、转换并生成阅读块。完成后会直接进入阅读器。"
+                  ? importProgress?.summary ?? "系统正在自动整理、转换并生成阅读块。完成后会直接进入阅读器。"
                   : "或直接把文件拖到这里。选中文件后会自动导入、转换并进入阅读器。"}
               </div>
               {importFilesMutation.isPending ? (
-                <div className="import-processing-stack" aria-hidden="true">
-                  <span className="import-processing-card" />
-                  <span className="import-processing-card" />
-                  <span className="import-processing-card" />
-                </div>
+                <>
+                  <div className="import-progress-shell" aria-hidden="true">
+                    <div
+                      className="import-progress-bar"
+                      style={{ width: `${importProgress?.percent ?? 8}%` }}
+                    />
+                  </div>
+                  <div className="import-progress-meta">
+                    <span>{importProgress?.summary ?? "正在处理资料"}</span>
+                    <span>{Math.round(importProgress?.percent ?? 0)}%</span>
+                  </div>
+                </>
               ) : null}
             </button>
             {importPaths.length > 0 ? <div className="import-path-list">
@@ -618,6 +673,51 @@ export function Dashboard({ bootstrap }: DashboardProps) {
               setCurrentView("阅读器");
             }}
           />
+        ) : currentView === "Studio" ? (
+          <StudioWorkspace
+            currentProject={currentProject}
+            documents={projectDocuments}
+            onOpenKnowledgeGraph={(artifactId) => {
+              setSelectedKnowledgeGraphArtifactId(artifactId);
+              setCurrentView("知识网络");
+            }}
+            onOpenPracticeSet={(artifactId) => {
+              setSelectedPracticeSetArtifactId(artifactId);
+              setCurrentView("练习题");
+            }}
+            onOpenMindMap={(artifactId) => {
+              setSelectedMindMapArtifactId(artifactId);
+              setCurrentView("思维导图");
+            }}
+            onOpenPresentation={(artifactId) => {
+              setSelectedPresentationArtifactId(artifactId);
+              setCurrentView("演示文稿");
+            }}
+          />
+        ) : currentView === "知识网络" ? (
+          <KnowledgeGraphWorkspace
+            currentProject={currentProject}
+            selectedArtifactId={selectedKnowledgeGraphArtifactId}
+            onSelectArtifact={setSelectedKnowledgeGraphArtifactId}
+          />
+        ) : currentView === "练习题" ? (
+          <PracticeSetWorkspace
+            currentProject={currentProject}
+            selectedArtifactId={selectedPracticeSetArtifactId}
+            onSelectArtifact={setSelectedPracticeSetArtifactId}
+          />
+        ) : currentView === "思维导图" ? (
+          <MindMapWorkspace
+            currentProject={currentProject}
+            selectedArtifactId={selectedMindMapArtifactId}
+            onSelectArtifact={setSelectedMindMapArtifactId}
+          />
+        ) : currentView === "演示文稿" ? (
+          <PresentationWorkspace
+            currentProject={currentProject}
+            selectedArtifactId={selectedPresentationArtifactId}
+            onSelectArtifact={setSelectedPresentationArtifactId}
+          />
         ) : (
           <ReaderWorkspace
             currentProject={currentProject}
@@ -625,6 +725,7 @@ export function Dashboard({ bootstrap }: DashboardProps) {
             currentDocument={currentDocument}
             onSelectDocument={setSelectedDocumentId}
             bootstrapBlocks={bootstrap.blocks}
+            paperAnalyzeTrigger={paperAnalyzeTrigger}
           />
         )}
       </section>
@@ -693,6 +794,66 @@ function mergeImportPaths(current: string[], incoming: string[]) {
   return Array.from(new Set([...current, ...incoming.map((item) => item.trim()).filter(Boolean)]));
 }
 
+function buildImportProgress(documents: Document[]): ImportProgressState {
+  const total = documents.length;
+  if (total === 0) {
+    return {
+      total: 0,
+      completed: 0,
+      failed: 0,
+      percent: 0,
+      currentStage: "等待导入资料",
+      summary: "尚未开始处理资料。"
+    };
+  }
+
+  const completed = documents.filter((item) => ["chunked", "indexed", "ready"].includes(item.parseStatus)).length;
+  const failed = documents.filter((item) => item.parseStatus === "failed").length;
+  const stageOrder: Record<Document["parseStatus"], number> = {
+    imported: 0.08,
+    parsing: 0.22,
+    ai_normalizing: 0.48,
+    normalized: 0.62,
+    ai_chunking: 0.84,
+    chunked: 1,
+    indexed: 1,
+    ready: 1,
+    failed: 1
+  };
+  const percent = Math.min(
+    100,
+    Math.max(
+      6,
+      (documents.reduce((sum, item) => sum + (stageOrder[item.parseStatus] ?? 0.08), 0) / total) * 100
+    )
+  );
+
+  let currentStage = "正在整理导入结果";
+  if (documents.some((item) => item.parseStatus === "ai_chunking")) {
+    currentStage = "正在进行 AI 语义分块";
+  } else if (documents.some((item) => item.parseStatus === "normalized")) {
+    currentStage = "正在准备生成阅读块";
+  } else if (documents.some((item) => item.parseStatus === "ai_normalizing")) {
+    currentStage = "正在进行 AI 格式校正";
+  } else if (documents.some((item) => item.parseStatus === "parsing" || item.parseStatus === "imported")) {
+    currentStage = "正在解析原始资料";
+  } else if (completed + failed === total) {
+    currentStage = failed > 0 ? "导入已完成，部分资料失败" : "导入已完成";
+  }
+
+  return {
+    total,
+    completed,
+    failed,
+    percent,
+    currentStage,
+    summary:
+      failed > 0
+        ? `共 ${total} 个文件，已完成 ${completed} 个，失败 ${failed} 个。`
+        : `共 ${total} 个文件，已完成 ${completed} 个。`
+  };
+}
+
 function SvgSearchIcon() {
   return (
     <svg className="library-inline-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -744,6 +905,18 @@ function SvgDocumentIcon() {
   );
 }
 
+function SvgPaperExplainIcon() {
+  return (
+    <svg className="library-inline-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M4 2.5H9.2L12 5.3V13.5H4V2.5Z" />
+      <path d="M9 2.8V5.6H11.8" />
+      <path d="M6 7.2H10" />
+      <path d="M6 9.2H10" />
+      <path d="M6 11.2H8.8" />
+    </svg>
+  );
+}
+
 function SvgCardsIcon() {
   return (
     <svg className="library-inline-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -772,6 +945,17 @@ function SvgSparkIcon() {
   return (
     <svg className="library-inline-icon" viewBox="0 0 16 16" aria-hidden="true">
       <path d="M8 2.4L9.2 6.8L13.6 8L9.2 9.2L8 13.6L6.8 9.2L2.4 8L6.8 6.8L8 2.4Z" />
+    </svg>
+  );
+}
+
+function SvgStudioIcon() {
+  return (
+    <svg className="library-inline-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
+      <path d="M5 5.5H11" />
+      <path d="M5 8H8.6" />
+      <path d="M5 10.5H9.8" />
     </svg>
   );
 }

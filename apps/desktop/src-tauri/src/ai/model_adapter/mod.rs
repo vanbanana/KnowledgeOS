@@ -1,4 +1,6 @@
-use std::time::Instant;
+use std::io::Read;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use reqwest::{Client as AsyncClient, blocking::Client};
 use serde::{Deserialize, Serialize};
@@ -178,24 +180,49 @@ impl ModelAdapter for DeepSeekModelAdapter {
             })
         };
 
-        let response = self
-            .client
-            .post(&self.settings.api_base_url)
-            .bearer_auth(&self.settings.api_key)
-            .json(&payload)
-            .send()
-            .map_err(|error| format!("调用 DeepSeek API 失败: {error}"))?;
+        let mut last_error = String::new();
+        let mut body = String::new();
+        let mut payload_response: Option<DeepSeekChatCompletionResponse> = None;
 
-        let status = response.status();
-        let body = response
-            .text()
-            .map_err(|error| format!("读取 DeepSeek 响应失败: {error}"))?;
-        if !status.is_success() {
-            return Err(format!("DeepSeek API 返回错误 {status}: {body}"));
+        for attempt in 0..3 {
+            let response = self
+                .client
+                .post(&self.settings.api_base_url)
+                .header("Accept-Encoding", "identity")
+                .header("Connection", "close")
+                .bearer_auth(&self.settings.api_key)
+                .json(&payload)
+                .send()
+                .map_err(|error| format!("调用 DeepSeek API 失败: {error}"))?;
+
+            let status = response.status();
+            body = read_response_body(response)?;
+            if !status.is_success() {
+                return Err(format!("DeepSeek API 返回错误 {status}: {body}"));
+            }
+
+            match serde_json::from_str::<DeepSeekChatCompletionResponse>(&body) {
+                Ok(parsed) => {
+                    payload_response = Some(parsed);
+                    break;
+                }
+                Err(error) => {
+                    last_error = format!("解析 DeepSeek 响应失败: {error}");
+                    if attempt < 2 {
+                        thread::sleep(Duration::from_millis(220 * (attempt + 1) as u64));
+                        continue;
+                    }
+                }
+            }
         }
 
-        let payload: DeepSeekChatCompletionResponse =
-            serde_json::from_str(&body).map_err(|error| format!("解析 DeepSeek 响应失败: {error}"))?;
+        let payload = payload_response.ok_or_else(|| {
+            if body.is_empty() {
+                last_error.clone()
+            } else {
+                format!("{last_error}；响应片段：{}", trim_preview_text(&body))
+            }
+        })?;
         let content = payload
             .choices
             .first()
@@ -261,6 +288,7 @@ where
 
     let mut response = client
         .post(&settings.api_base_url)
+        .header("Accept-Encoding", "identity")
         .bearer_auth(&settings.api_key)
         .json(&payload)
         .send()
@@ -270,8 +298,9 @@ where
     let status = response.status();
     if !status.is_success() {
         let body = response
-            .text()
+            .bytes()
             .await
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
             .map_err(|error| format!("读取 DeepSeek 响应失败: {error}"))?;
         return Err(format!("DeepSeek API 返回错误 {status}: {body}"));
     }
@@ -374,4 +403,23 @@ struct DeepSeekStreamChoice {
 struct DeepSeekStreamDelta {
     #[serde(default)]
     content: Option<String>,
+}
+
+fn read_response_body(response: reqwest::blocking::Response) -> Result<String, String> {
+    let mut response = response;
+    let mut buffer = Vec::new();
+    response
+        .read_to_end(&mut buffer)
+        .map_err(|error| format!("读取 DeepSeek 响应失败: {error}"))?;
+    Ok(String::from_utf8_lossy(&buffer).into_owned())
+}
+
+fn trim_preview_text(text: &str) -> String {
+    let compact = text.replace('\n', " ").replace('\r', " ");
+    let trimmed = compact.trim();
+    if trimmed.chars().count() > 180 {
+        format!("{}...", trimmed.chars().take(180).collect::<String>())
+    } else {
+        trimmed.to_string()
+    }
 }

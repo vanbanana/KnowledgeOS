@@ -12,7 +12,9 @@ export const projectStatusSchema = z.enum(["active", "archived"]);
 export const documentStatusSchema = z.enum([
   "imported",
   "parsing",
+  "ai_normalizing",
   "normalized",
+  "ai_chunking",
   "chunked",
   "indexed",
   "ready",
@@ -20,7 +22,7 @@ export const documentStatusSchema = z.enum([
 ]);
 export const documentSourceTypeSchema = z.enum(["pdf", "pptx", "docx", "md", "txt", "unknown"]);
 export const parserJobStatusSchema = z.enum(["pending", "running", "succeeded", "failed", "cancelled"]);
-export const blockTypeSchema = z.enum(["section", "paragraph", "note"]);
+export const blockTypeSchema = z.enum(["section", "paragraph", "note", "example"]);
 
 export const logLevelSchema = z.enum(["trace", "debug", "info", "warn", "error"]);
 
@@ -137,6 +139,15 @@ export const explainResultSchema = z.object({
   pitfalls: z.array(z.string()).default([]),
   examples: z.array(z.string()).default([]),
   relatedCandidates: z.array(explainRelatedCandidateSchema).default([]),
+  roleInPaper: z.string().optional(),
+  keyPoints: z.array(z.string()).default([]),
+  terms: z.array(explainKeyConceptSchema).default([]),
+  methodOrLogic: z.string().optional(),
+  evidence: z.string().optional(),
+  assumptionsOrLimits: z.string().optional(),
+  plainExplanation: z.string().optional(),
+  language: z.enum(["zh", "en"]).optional(),
+  confidence: z.enum(["high", "medium", "low"]).optional(),
   mode: z.string(),
   promptVersion: z.string()
 });
@@ -358,6 +369,65 @@ export const relationSuggestionSchema = z.object({
   relation: graphRelationSchema,
   fromNodeLabel: z.string(),
   toNodeLabel: z.string()
+});
+
+export const studioArtifactKindSchema = z.enum([
+  "knowledge_graph",
+  "practice_set",
+  "mind_map",
+  "presentation"
+]);
+
+export const studioArtifactStatusSchema = z.enum([
+  "queued",
+  "preparing",
+  "generating",
+  "materializing",
+  "completed",
+  "failed"
+]);
+
+export const studioArtifactSchema = z.object({
+  artifactId: z.string(),
+  projectId: z.string(),
+  kind: studioArtifactKindSchema,
+  title: z.string(),
+  sourceDocumentIdsJson: z.string(),
+  status: studioArtifactStatusSchema,
+  progressPercent: z.number().int().nonnegative(),
+  currentStage: z.string().nullable(),
+  outputPath: z.string().nullable(),
+  previewJson: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
+export const createStudioArtifactInputSchema = z.object({
+  projectId: z.string().min(1),
+  kind: studioArtifactKindSchema,
+  title: z.string().min(1).optional(),
+  sourceDocumentIds: z.array(z.string().min(1)).min(1)
+});
+
+export const generateStudioArtifactInputSchema = z.object({
+  artifactId: z.string().min(1)
+});
+
+export const listStudioArtifactsInputSchema = z.object({
+  projectId: z.string().min(1)
+});
+
+export const getStudioArtifactInputSchema = z.object({
+  artifactId: z.string().min(1)
+});
+
+export const studioArtifactCommandOutputSchema = z.object({
+  artifact: studioArtifactSchema
+});
+
+export const listStudioArtifactsOutputSchema = z.object({
+  artifacts: z.array(studioArtifactSchema)
 });
 
 export const planAgentTaskInputSchema = z.object({
@@ -639,11 +709,20 @@ export const explainBlockInputSchema = z.object({
 
 export const regenerateExplainBlockInputSchema = explainBlockInputSchema;
 
+export const listDocumentBlockExplanationsInputSchema = z.object({
+  documentId: z.string().min(1),
+  mode: z.string().optional()
+});
+
 export const explainBlockOutputSchema = z.object({
   explanation: blockExplanationSchema
 });
 
 export const listBlockExplanationsOutputSchema = z.object({
+  explanations: z.array(blockExplanationSchema)
+});
+
+export const listDocumentBlockExplanationsOutputSchema = z.object({
   explanations: z.array(blockExplanationSchema)
 });
 
@@ -697,6 +776,7 @@ export const commandNameSchema = z.enum([
   "block.explain",
   "block.explain.regenerate",
   "block.explain.list",
+  "block.explain.document.list",
   "explain.templates.list",
   "card.save",
   "card.list",
@@ -718,6 +798,10 @@ export const commandNameSchema = z.enum([
   "agent.rollback",
   "agent.logs",
   "agent.audit",
+  "studio.create",
+  "studio.generate",
+  "studio.list",
+  "studio.get",
   "job.enqueueMock",
   "job.list",
   "job.run",
@@ -772,6 +856,8 @@ export type ExplainBlockInput = z.infer<typeof explainBlockInputSchema>;
 export type ExplainBlockOutput = z.infer<typeof explainBlockOutputSchema>;
 export type RegenerateExplainBlockInput = z.infer<typeof regenerateExplainBlockInputSchema>;
 export type ListBlockExplanationsOutput = z.infer<typeof listBlockExplanationsOutputSchema>;
+export type ListDocumentBlockExplanationsInput = z.infer<typeof listDocumentBlockExplanationsInputSchema>;
+export type ListDocumentBlockExplanationsOutput = z.infer<typeof listDocumentBlockExplanationsOutputSchema>;
 export type ListExplainTemplatesOutput = z.infer<typeof listExplainTemplatesOutputSchema>;
 export type Card = z.infer<typeof cardSchema>;
 export type SaveCardInput = z.infer<typeof saveCardInputSchema>;
@@ -794,6 +880,15 @@ export type AgentTaskLog = z.infer<typeof agentTaskLogSchema>;
 export type SnapshotRecord = z.infer<typeof snapshotRecordSchema>;
 export type AuditDiffEntry = z.infer<typeof auditDiffEntrySchema>;
 export type RelationSuggestion = z.infer<typeof relationSuggestionSchema>;
+export type StudioArtifactKind = z.infer<typeof studioArtifactKindSchema>;
+export type StudioArtifactStatus = z.infer<typeof studioArtifactStatusSchema>;
+export type StudioArtifact = z.infer<typeof studioArtifactSchema>;
+export type CreateStudioArtifactInput = z.infer<typeof createStudioArtifactInputSchema>;
+export type GenerateStudioArtifactInput = z.infer<typeof generateStudioArtifactInputSchema>;
+export type ListStudioArtifactsInput = z.infer<typeof listStudioArtifactsInputSchema>;
+export type GetStudioArtifactInput = z.infer<typeof getStudioArtifactInputSchema>;
+export type StudioArtifactCommandOutput = z.infer<typeof studioArtifactCommandOutputSchema>;
+export type ListStudioArtifactsOutput = z.infer<typeof listStudioArtifactsOutputSchema>;
 export type PlanAgentTaskInput = z.infer<typeof planAgentTaskInputSchema>;
 export type AgentTaskIdInput = z.infer<typeof agentTaskIdInputSchema>;
 export type ListAgentTasksInput = z.infer<typeof listAgentTasksInputSchema>;
@@ -884,6 +979,10 @@ export const commandSchemas = {
     }),
     output: listBlockExplanationsOutputSchema
   },
+  "block.explain.document.list": {
+    input: listDocumentBlockExplanationsInputSchema,
+    output: listDocumentBlockExplanationsOutputSchema
+  },
   "explain.templates.list": {
     input: z.undefined(),
     output: listExplainTemplatesOutputSchema
@@ -969,6 +1068,22 @@ export const commandSchemas = {
   "agent.audit": {
     input: agentTaskIdInputSchema,
     output: getAgentAuditOutputSchema
+  },
+  "studio.create": {
+    input: createStudioArtifactInputSchema,
+    output: studioArtifactCommandOutputSchema
+  },
+  "studio.generate": {
+    input: generateStudioArtifactInputSchema,
+    output: studioArtifactCommandOutputSchema
+  },
+  "studio.list": {
+    input: listStudioArtifactsInputSchema,
+    output: listStudioArtifactsOutputSchema
+  },
+  "studio.get": {
+    input: getStudioArtifactInputSchema,
+    output: studioArtifactCommandOutputSchema
   },
   "job.enqueueMock": {
     input: enqueueJobInputSchema,

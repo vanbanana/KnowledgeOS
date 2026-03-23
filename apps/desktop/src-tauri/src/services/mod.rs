@@ -12,4 +12,5 @@ pub mod reader_state;
 pub mod rollback;
 pub mod search;
 pub mod snapshot;
+pub mod studio;
 pub mod vector;

@@ -32,7 +32,9 @@ pub struct DocumentRecord {
 pub enum DocumentStatus {
     Imported,
     Parsing,
+    AiNormalizing,
     Normalized,
+    AiChunking,
     Chunked,
     Indexed,
     Ready,
@@ -45,11 +47,17 @@ impl DocumentStatus {
             (self, next),
             (Self::Imported, Self::Parsing)
                 | (Self::Imported, Self::Failed)
+                | (Self::Parsing, Self::AiNormalizing)
                 | (Self::Parsing, Self::Normalized)
                 | (Self::Parsing, Self::Failed)
                 | (Self::Parsing, Self::Imported)
+                | (Self::AiNormalizing, Self::Normalized)
+                | (Self::AiNormalizing, Self::Failed)
+                | (Self::Normalized, Self::AiChunking)
                 | (Self::Normalized, Self::Chunked)
                 | (Self::Normalized, Self::Failed)
+                | (Self::AiChunking, Self::Chunked)
+                | (Self::AiChunking, Self::Failed)
                 | (Self::Chunked, Self::Indexed)
                 | (Self::Chunked, Self::Failed)
                 | (Self::Indexed, Self::Ready)
@@ -66,7 +74,9 @@ impl Display for DocumentStatus {
         let value = match self {
             Self::Imported => "imported",
             Self::Parsing => "parsing",
+            Self::AiNormalizing => "ai_normalizing",
             Self::Normalized => "normalized",
+            Self::AiChunking => "ai_chunking",
             Self::Chunked => "chunked",
             Self::Indexed => "indexed",
             Self::Ready => "ready",
@@ -83,7 +93,9 @@ impl TryFrom<&str> for DocumentStatus {
         match value {
             "imported" => Ok(Self::Imported),
             "parsing" => Ok(Self::Parsing),
+            "ai_normalizing" => Ok(Self::AiNormalizing),
             "normalized" => Ok(Self::Normalized),
+            "ai_chunking" => Ok(Self::AiChunking),
             "chunked" => Ok(Self::Chunked),
             "indexed" => Ok(Self::Indexed),
             "ready" => Ok(Self::Ready),
@@ -289,6 +301,7 @@ pub fn cleanup_unreadable_documents(connection: &Connection) -> Result<(), Strin
     for document in documents {
         let source_path = normalize_filesystem_path(&document.source_path);
         let source_missing = !source_path.exists();
+        let current_status = DocumentStatus::try_from(document.parse_status.as_str())?;
         let block_count: i64 = connection
             .query_row(
                 "SELECT COUNT(1) FROM blocks WHERE document_id = ?1",
@@ -297,16 +310,63 @@ pub fn cleanup_unreadable_documents(connection: &Connection) -> Result<(), Strin
             )
             .map_err(|error| error.to_string())?;
         if block_count > 0 {
+            if current_status == DocumentStatus::Failed
+                && document.last_error_message.as_deref() == Some("只有 normalized 文档可以切块")
+            {
+                let _ = transition_document_status(
+                    connection,
+                    &document.document_id,
+                    DocumentStatus::Failed,
+                    DocumentStatus::Normalized,
+                    None,
+                );
+                let _ = transition_document_status(
+                    connection,
+                    &document.document_id,
+                    DocumentStatus::Normalized,
+                    DocumentStatus::Chunked,
+                    None,
+                );
+            }
             continue;
         }
 
-        let maybe_project_root = source_path
-            .parent()
-            .and_then(Path::parent)
-            .map(Path::to_path_buf);
-        if let Some(project_root) = maybe_project_root {
-            if rebuild_missing_blocks(connection, &project_root, &document.document_id).is_ok() {
-                continue;
+        let can_attempt_rebuild = matches!(
+            current_status,
+            DocumentStatus::Chunked | DocumentStatus::Indexed | DocumentStatus::Ready
+        ) || (
+            current_status == DocumentStatus::Failed
+                && document.last_error_message.as_deref() == Some("只有 normalized 文档可以切块")
+                && document.normalized_md_path.is_some()
+        );
+
+        if can_attempt_rebuild {
+            let maybe_project_root = source_path
+                .parent()
+                .and_then(Path::parent)
+                .map(Path::to_path_buf);
+            if let Some(project_root) = maybe_project_root {
+                if rebuild_missing_blocks(connection, &project_root, &document.document_id).is_ok() {
+                    if current_status == DocumentStatus::Failed
+                        && document.last_error_message.as_deref() == Some("只有 normalized 文档可以切块")
+                    {
+                        let _ = transition_document_status(
+                            connection,
+                            &document.document_id,
+                            DocumentStatus::Failed,
+                            DocumentStatus::Normalized,
+                            None,
+                        );
+                        let _ = transition_document_status(
+                            connection,
+                            &document.document_id,
+                            DocumentStatus::Normalized,
+                            DocumentStatus::Chunked,
+                            None,
+                        );
+                    }
+                    continue;
+                }
             }
         }
 

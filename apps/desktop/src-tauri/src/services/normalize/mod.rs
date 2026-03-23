@@ -5,7 +5,10 @@ use chrono::Utc;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Deserialize, Serialize)]
+use crate::ai::model_adapter::{ModelRequest, build_model_adapter};
+use crate::config::AppConfig;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManifestSection {
     pub heading: Option<String>,
@@ -13,7 +16,7 @@ pub struct ManifestSection {
     pub index: usize,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NormalizedManifest {
     pub title: String,
@@ -27,12 +30,30 @@ pub struct NormalizedManifest {
     pub warnings: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NormalizeResult {
     pub ok: bool,
     pub markdown: String,
     pub manifest: NormalizedManifest,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiCleanupResponse {
+    title: String,
+    markdown: String,
+    #[serde(default)]
+    sections: Vec<AiCleanupSection>,
+    #[serde(default)]
+    warnings: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AiCleanupSection {
+    heading: String,
+    anchor: String,
 }
 
 pub fn read_normalized_result(
@@ -63,6 +84,111 @@ pub fn read_normalized_result(
 
 fn normalize_filesystem_path(path: &str) -> PathBuf {
     PathBuf::from(path.trim_start_matches(r"\\?\"))
+}
+
+pub fn refine_normalized_result(
+    config: &AppConfig,
+    source_type: &str,
+    result: NormalizeResult,
+) -> Result<NormalizeResult, String> {
+    if config.model_settings.provider == "mock" {
+        return Ok(result);
+    }
+
+    let prompt_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("packages")
+        .join("prompt-templates")
+        .join("import_markdown_cleanup_system.md");
+    let system_prompt = fs::read_to_string(prompt_path).map_err(|error| error.to_string())?;
+
+    let adapter = build_model_adapter(&config.model_settings)?;
+    let manifest_json =
+        serde_json::to_string_pretty(&result.manifest).map_err(|error| error.to_string())?;
+    let prompt = format!(
+        "源文档类型：{source_type}\n当前标题：{}\n当前 manifest：\n{}\n\n请整理下面这份 Markdown：\n{}",
+        result.manifest.title, manifest_json, result.markdown
+    );
+    let response = adapter.complete(&ModelRequest {
+        task_type: "import.normalize".to_string(),
+        provider: config.model_settings.provider.clone(),
+        model: config.model_settings.default_model.clone(),
+        system_prompt,
+        prompt,
+        output_format: "json".to_string(),
+        context_blocks: Vec::new(),
+        metadata_json: "{}".to_string(),
+        temperature: 0.1,
+        max_output_tokens: 8000,
+    })?;
+
+    let payload: AiCleanupResponse =
+        serde_json::from_str(&response.output_text).map_err(|error| error.to_string())?;
+    let markdown = payload.markdown.trim().to_string();
+    if markdown.is_empty() {
+        return Err("AI 格式校正返回了空 Markdown".to_string());
+    }
+    if markdown.chars().count() < (result.markdown.chars().count() / 3).max(80) {
+        return Err("AI 格式校正结果过短，已拒绝覆盖原始 Markdown".to_string());
+    }
+
+    let sections = if payload.sections.is_empty() {
+        result.manifest.sections.clone()
+    } else {
+        payload
+            .sections
+            .into_iter()
+            .enumerate()
+            .map(|(index, section)| ManifestSection {
+                heading: Some(section.heading),
+                anchor: if section.anchor.trim().is_empty() {
+                    format!("section-{}", index + 1)
+                } else {
+                    slugify_anchor(&section.anchor)
+                },
+                index,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    Ok(NormalizeResult {
+        ok: true,
+        markdown,
+        manifest: NormalizedManifest {
+            title: if payload.title.trim().is_empty() {
+                result.manifest.title
+            } else {
+                payload.title
+            },
+            source_type: result.manifest.source_type,
+            source_path: result.manifest.source_path,
+            sections,
+            assets: result.manifest.assets,
+            warnings: if payload.warnings.is_empty() {
+                result.manifest.warnings
+            } else {
+                payload.warnings
+            },
+        },
+    })
+}
+
+fn slugify_anchor(value: &str) -> String {
+    let mut output = String::new();
+    for character in value.chars() {
+        if character.is_ascii_alphanumeric() {
+            output.push(character.to_ascii_lowercase());
+        } else if !character.is_ascii() {
+            output.push(character);
+        } else if (character.is_whitespace() || character == '-' || character == '_')
+            && !output.ends_with('-')
+        {
+            output.push('-');
+        }
+    }
+    output.trim_matches('-').to_string()
 }
 
 pub fn write_normalized_result(

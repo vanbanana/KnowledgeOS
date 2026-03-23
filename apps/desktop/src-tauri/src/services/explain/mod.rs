@@ -1,6 +1,10 @@
+use std::fs;
+use std::path::PathBuf;
+
 use chrono::Utc;
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use crate::ai::model_adapter::{ModelAdapter, ModelRequest};
@@ -38,6 +42,24 @@ pub struct ExplainResult {
     pub examples: Vec<String>,
     #[serde(default)]
     pub related_candidates: Vec<ExplainRelatedCandidate>,
+    #[serde(default)]
+    pub role_in_paper: Option<String>,
+    #[serde(default)]
+    pub key_points: Vec<String>,
+    #[serde(default)]
+    pub terms: Vec<ExplainKeyConcept>,
+    #[serde(default)]
+    pub method_or_logic: Option<String>,
+    #[serde(default)]
+    pub evidence: Option<String>,
+    #[serde(default)]
+    pub assumptions_or_limits: Option<String>,
+    #[serde(default)]
+    pub plain_explanation: Option<String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub confidence: Option<String>,
     pub mode: String,
     pub prompt_version: String,
 }
@@ -168,8 +190,7 @@ fn explain_block_with_options(
         max_output_tokens: 900,
     })?;
 
-    let explain_result: ExplainResult = serde_json::from_str(&response.output_text)
-        .map_err(|error| format!("Explain JSON 解析失败: {error}"))?;
+    let explain_result = parse_explain_result(mode, &response.output_text)?;
 
     persist_block_explanation(
         connection,
@@ -198,6 +219,299 @@ pub fn list_block_explanations(
     let rows = statement
         .query_map([block_id], map_block_explanation_row)
         .map_err(|error| error.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())
+}
+
+fn parse_explain_result(mode: &str, raw: &str) -> Result<ExplainResult, String> {
+    let json_text = extract_json_object(raw).unwrap_or(raw).trim();
+    let mut value = serde_json::from_str::<Value>(json_text)
+        .map_err(|error| format!("Explain JSON 解析失败: {error}"))?;
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "Explain 返回结果不是对象".to_string())?;
+
+    normalize_explain_object(mode, object);
+
+    serde_json::from_value(Value::Object(object.clone()))
+        .map_err(|error| format!("Explain JSON 字段不符合要求: {error}"))
+}
+
+fn extract_json_object(raw: &str) -> Option<&str> {
+    let start = raw.find('{')?;
+    let end = raw.rfind('}')?;
+    if end <= start {
+        return None;
+    }
+    Some(&raw[start..=end])
+}
+
+fn normalize_explain_object(mode: &str, object: &mut Map<String, Value>) {
+    let parsed_content = object
+        .get("parsed_content")
+        .and_then(Value::as_object)
+        .cloned();
+
+    if !object.contains_key("summary") {
+        let fallback = read_string_field(
+            object,
+            &["summary", "what_is_this_block_about", "当前块主题", "说明当前块到底在讲什么"],
+        )
+        .or_else(|| read_nested_string_field(parsed_content.as_ref(), &["what_is_this_block_about", "当前块主题", "说明当前块到底在讲什么"]))
+        .unwrap_or_else(|| "当前块未提供充分信息".to_string());
+        object.insert("summary".to_string(), Value::String(fallback));
+    }
+    if !object.contains_key("roleInDocument") {
+        let fallback = read_string_field(object, &["roleInPaper", "role_in_paper"])
+            .or_else(|| read_nested_string_field(parsed_content.as_ref(), &["role_in_paper", "在论文中的作用", "role_in_paper", "role_in_document", "在论文整体中的作用"]))
+            .unwrap_or_else(|| "当前块未提供充分信息".to_string());
+        object.insert("roleInDocument".to_string(), Value::String(fallback));
+    }
+    if !object.contains_key("roleInPaper") {
+        let fallback = read_string_field(object, &["roleInDocument", "role_in_document"])
+            .or_else(|| read_nested_string_field(parsed_content.as_ref(), &["role_in_paper", "在论文中的作用", "在论文整体中的作用"]))
+            .unwrap_or_else(|| "当前块未提供充分信息".to_string());
+        object.insert("roleInPaper".to_string(), Value::String(fallback));
+    }
+    if !object.contains_key("keyConcepts") {
+        if let Some(terms) = object.get("terms").cloned() {
+            object.insert("keyConcepts".to_string(), terms);
+        } else if let Some(terms) = read_nested_terms(parsed_content.as_ref()) {
+            object.insert("keyConcepts".to_string(), terms.clone());
+            object.insert("terms".to_string(), terms);
+        } else {
+            object.insert("keyConcepts".to_string(), Value::Array(Vec::new()));
+        }
+    }
+    ensure_array_field(object, "prerequisites");
+    ensure_array_field(object, "pitfalls");
+    ensure_array_field(object, "examples");
+    ensure_array_field(object, "relatedCandidates");
+    if !matches!(object.get("keyPoints"), Some(Value::Array(_))) {
+        object.insert(
+            "keyPoints".to_string(),
+            read_nested_string_array(parsed_content.as_ref(), &["key_points", "最重要要点"]).unwrap_or(Value::Array(Vec::new())),
+        );
+    }
+    if !matches!(object.get("terms"), Some(Value::Array(_))) {
+        if let Some(terms) = read_nested_terms(parsed_content.as_ref()) {
+            object.insert("terms".to_string(), terms);
+        } else {
+            object.insert("terms".to_string(), Value::Array(Vec::new()));
+        }
+    }
+    ensure_string_field_from_sources(
+        object,
+        "methodOrLogic",
+        "当前块未提供充分信息",
+        parsed_content.as_ref(),
+        &["methodOrLogic", "核心逻辑", "核心逻辑或证据", "core_logic_if_method", "core_logic_if_method_or_experiment"],
+    );
+    ensure_string_field_from_sources(
+        object,
+        "evidence",
+        "当前块未提供充分信息",
+        parsed_content.as_ref(),
+        &["evidence", "证据或结果", "证据或现象", "evidence_if_applicable", "evidence_if_results_or_observations"],
+    );
+    ensure_string_field_from_sources(
+        object,
+        "assumptionsOrLimits",
+        "当前块未体现",
+        parsed_content.as_ref(),
+        &["assumptionsOrLimits", "假设、限制或边界条件", "假设、限制或边界条件", "assumptions_or_limits", "assumptions_limitations_boundaries"],
+    );
+    let default_plain = read_string_field(object, &["summary"]).unwrap_or_else(|| "当前块未提供充分信息".to_string());
+    ensure_string_field_from_sources(
+        object,
+        "plainExplanation",
+        &default_plain,
+        parsed_content.as_ref(),
+        &["plainExplanation", "直白解释", "plain_language_explanation"],
+    );
+    ensure_string_field(object, "language", "zh");
+    ensure_string_field(object, "confidence", "medium");
+    ensure_string_field(object, "mode", mode);
+    ensure_string_field(object, "promptVersion", EXPLAIN_PROMPT_VERSION);
+}
+
+fn read_string_field(object: &Map<String, Value>, keys: &[&str]) -> Option<String> {
+    for key in keys {
+        if let Some(value) = object.get(*key).and_then(Value::as_str) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    None
+}
+
+fn ensure_array_field(object: &mut Map<String, Value>, key: &str) {
+    if !matches!(object.get(key), Some(Value::Array(_))) {
+        object.insert(key.to_string(), Value::Array(Vec::new()));
+    }
+}
+
+fn ensure_string_field(object: &mut Map<String, Value>, key: &str, default_value: &str) {
+    if object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    object.insert(key.to_string(), Value::String(default_value.to_string()));
+}
+
+fn ensure_string_field_from_sources(
+    object: &mut Map<String, Value>,
+    key: &str,
+    default_value: &str,
+    nested: Option<&Map<String, Value>>,
+    extra_keys: &[&str],
+) {
+    if object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false)
+    {
+        return;
+    }
+
+    let direct = read_string_field(object, extra_keys);
+    let nested_value = read_nested_string_field(nested, extra_keys);
+    object.insert(
+        key.to_string(),
+        Value::String(direct.or(nested_value).unwrap_or_else(|| default_value.to_string())),
+    );
+}
+
+fn read_nested_string_field(
+    nested: Option<&Map<String, Value>>,
+    keys: &[&str],
+) -> Option<String> {
+    let object = nested?;
+    read_string_field(object, keys)
+}
+
+fn read_nested_string_array(
+    nested: Option<&Map<String, Value>>,
+    keys: &[&str],
+) -> Option<Value> {
+    let object = nested?;
+    for key in keys {
+        if let Some(Value::Array(items)) = object.get(*key) {
+            return Some(Value::Array(items.clone()));
+        }
+        if let Some(Value::String(text)) = object.get(*key) {
+            let items = text
+                .lines()
+                .map(str::trim)
+                .map(|line| line.trim_start_matches(|ch: char| ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '•' || ch.is_whitespace()))
+                .filter(|line| !line.is_empty())
+                .map(|line| Value::String(line.to_string()))
+                .collect::<Vec<_>>();
+            if !items.is_empty() {
+                return Some(Value::Array(items));
+            }
+        }
+    }
+    None
+}
+
+fn read_nested_terms(nested: Option<&Map<String, Value>>) -> Option<Value> {
+    let object = nested?;
+    for key in ["terms", "key_terms", "关键术语解释"] {
+        if let Some(Value::Array(items)) = object.get(key) {
+            return Some(Value::Array(items.clone()));
+        }
+        if let Some(Value::Object(map)) = object.get(key) {
+            let items = map
+                .iter()
+                .map(|(term, explanation)| {
+                    Value::Object(
+                        [
+                            ("term".to_string(), Value::String(term.clone())),
+                            (
+                                "explanation".to_string(),
+                                Value::String(explanation.as_str().unwrap_or("").to_string()),
+                            ),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if !items.is_empty() {
+                return Some(Value::Array(items));
+            }
+        }
+        if let Some(Value::String(text)) = object.get(key) {
+            let items = text
+                .lines()
+                .filter_map(|line| {
+                    let trimmed = line.trim().trim_start_matches(|ch: char| ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '•' || ch.is_whitespace());
+                    let (term, explanation) = trimmed.split_once('：').or_else(|| trimmed.split_once(':'))?;
+                    Some(Value::Object(
+                        [
+                            ("term".to_string(), Value::String(term.trim().to_string())),
+                            ("explanation".to_string(), Value::String(explanation.trim().to_string())),
+                        ]
+                        .into_iter()
+                        .collect(),
+                    ))
+                })
+                .collect::<Vec<_>>();
+            if !items.is_empty() {
+                return Some(Value::Array(items));
+            }
+        }
+    }
+    None
+}
+
+pub fn list_document_block_explanations(
+    connection: &Connection,
+    document_id: &str,
+    mode: Option<&str>,
+) -> Result<Vec<BlockExplanationRecord>, String> {
+    let mut statement = if mode.is_some() {
+        connection
+            .prepare(
+                "SELECT e.explanation_id, e.block_id, e.mode, e.summary, e.key_concepts_json, e.prerequisites_json, e.pitfalls_json,
+                        e.role_in_document, e.related_candidates_json, e.examples_json, e.model_name, e.prompt_version, e.cache_key,
+                        e.raw_response_json, e.created_at
+                 FROM block_explanations e
+                 INNER JOIN blocks b ON b.block_id = e.block_id
+                 WHERE b.document_id = ?1 AND e.mode = ?2
+                 ORDER BY b.order_index ASC, e.created_at DESC",
+            )
+            .map_err(|error| error.to_string())?
+    } else {
+        connection
+            .prepare(
+                "SELECT e.explanation_id, e.block_id, e.mode, e.summary, e.key_concepts_json, e.prerequisites_json, e.pitfalls_json,
+                        e.role_in_document, e.related_candidates_json, e.examples_json, e.model_name, e.prompt_version, e.cache_key,
+                        e.raw_response_json, e.created_at
+                 FROM block_explanations e
+                 INNER JOIN blocks b ON b.block_id = e.block_id
+                 WHERE b.document_id = ?1
+                 ORDER BY b.order_index ASC, e.created_at DESC",
+            )
+            .map_err(|error| error.to_string())?
+    };
+    let rows = if let Some(mode_value) = mode {
+        statement
+            .query_map([document_id, mode_value], map_block_explanation_row)
+            .map_err(|error| error.to_string())?
+    } else {
+        statement
+            .query_map([document_id], map_block_explanation_row)
+            .map_err(|error| error.to_string())?
+    };
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())
 }
@@ -245,13 +559,32 @@ pub fn seed_default_explain_templates(connection: &Connection) -> Result<(), Str
                     }
                 }
             },
+            "roleInPaper": { "type": "string" },
+            "keyPoints": { "type": "array", "items": { "type": "string" } },
+            "terms": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["term", "explanation"],
+                    "properties": {
+                        "term": { "type": "string" },
+                        "explanation": { "type": "string" }
+                    }
+                }
+            },
+            "methodOrLogic": { "type": "string" },
+            "evidence": { "type": "string" },
+            "assumptionsOrLimits": { "type": "string" },
+            "plainExplanation": { "type": "string" },
+            "language": { "type": "string" },
+            "confidence": { "type": "string" },
             "mode": { "type": "string" },
             "promptVersion": { "type": "string" }
         }
     })
     .to_string();
 
-    for mode in ["default", "intro", "exam", "research"] {
+    for mode in ["default", "intro", "exam", "research", "paper"] {
         connection
             .execute(
                 "INSERT OR REPLACE INTO explain_templates (
@@ -260,7 +593,7 @@ pub fn seed_default_explain_templates(connection: &Connection) -> Result<(), Str
                 params![
                     EXPLAIN_PROMPT_VERSION,
                     mode,
-                    "你是 KnowledgeOS 的块级解释助手。只能输出 JSON，不允许输出额外文本。",
+                    load_system_prompt_for_mode(mode),
                     build_user_prompt_template(mode),
                     schema_json,
                     Utc::now().to_rfc3339()
@@ -298,9 +631,29 @@ pub fn list_explain_templates(
 }
 
 fn build_user_prompt_template(mode: &str) -> String {
+    if mode == "paper" {
+        return "请基于当前论文块输出论文解析 JSON。\n模式：paper\nblock_id={{block_id}}\nheading_path={{heading_path}}\ncontent_md:\n{{content_md}}\n只输出 JSON。".to_string();
+    }
     format!(
         "请基于以下块内容生成结构化 Explain JSON。\n模式：{mode}\nblock_id={{block_id}}\nheading_path={{heading_path}}\ncontent_md:\n{{content_md}}\n只输出 JSON。"
     )
+}
+
+fn load_system_prompt_for_mode(mode: &str) -> String {
+    if mode != "paper" {
+        return "你是 KnowledgeOS 的块级解释助手。只能输出 JSON，不允许输出额外文本。".to_string();
+    }
+
+    let prompt_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("..")
+        .join("packages")
+        .join("prompt-templates")
+        .join("paper_block_explain_system.md");
+    fs::read_to_string(prompt_path).unwrap_or_else(|_| {
+        "你是 KnowledgeOS 的论文块解析助手。无论原文是中文还是英文，都必须输出中文 JSON，术语首次出现时保留英文原词并补充中文解释。只能基于当前块内容回答，不允许输出额外文本。".to_string()
+    })
 }
 
 fn get_explain_template(
@@ -584,6 +937,18 @@ mod tests {
                     relation_hint: "related".to_string(),
                     confidence: 0.7,
                 }],
+                role_in_paper: Some("方法说明".to_string()),
+                key_points: vec!["测试要点".to_string()],
+                terms: vec![ExplainKeyConcept {
+                    term: "Transformer".to_string(),
+                    explanation: "测试术语解释".to_string(),
+                }],
+                method_or_logic: Some("测试逻辑".to_string()),
+                evidence: Some("测试证据".to_string()),
+                assumptions_or_limits: Some("测试限制".to_string()),
+                plain_explanation: Some("测试白话解释".to_string()),
+                language: Some("zh".to_string()),
+                confidence: Some("high".to_string()),
                 mode: "default".to_string(),
                 prompt_version: EXPLAIN_PROMPT_VERSION.to_string(),
             };

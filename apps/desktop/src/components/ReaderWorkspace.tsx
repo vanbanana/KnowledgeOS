@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
-import type { AgentTask, Block, Document, GetAgentAuditOutput, Project } from "@knowledgeos/shared-types";
+import type { Block, BlockExplanation, Document, GetAgentAuditOutput, Project } from "@knowledgeos/shared-types";
 import {
   chatWithBlock,
   confirmAgentTask,
   deleteBlock,
+  explainBlock,
   generateAgentPreview,
   getAgentAudit,
   insertNoteBlock,
+  listDocumentBlockExplanations,
   listBlocks,
   planAgentTask,
   updateBlock,
@@ -22,6 +24,7 @@ interface ReaderWorkspaceProps {
   currentDocument: Document | null;
   onSelectDocument: (documentId: string | null) => void;
   bootstrapBlocks: Block[];
+  paperAnalyzeTrigger: number;
 }
 
 interface ChatMessage {
@@ -68,12 +71,25 @@ interface DragPreviewState {
   title: string;
 }
 
+interface PaperExplainViewModel {
+  summary: string;
+  roleInPaper: string;
+  keyPoints: string[];
+  terms: { term: string; explanation: string }[];
+  methodOrLogic: string;
+  evidence: string;
+  assumptionsOrLimits: string;
+  plainExplanation: string;
+  confidence: string;
+}
+
 export function ReaderWorkspace({
   currentProject,
   documents,
   currentDocument,
   onSelectDocument,
-  bootstrapBlocks
+  bootstrapBlocks,
+  paperAnalyzeTrigger
 }: ReaderWorkspaceProps) {
   const queryClient = useQueryClient();
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
@@ -91,18 +107,27 @@ export function ReaderWorkspace({
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [editingBlockTitle, setEditingBlockTitle] = useState("");
   const [editingBlockContent, setEditingBlockContent] = useState("");
+  const [paperExplainProgressByDocument, setPaperExplainProgressByDocument] = useState<Record<string, {
+    total: number;
+    completed: number;
+    failed: number;
+    running: number;
+    active: boolean;
+  }>>({});
+  const [paperExplainStatusesByDocument, setPaperExplainStatusesByDocument] = useState<Record<string, Record<string, "idle" | "running" | "completed" | "failed">>>({});
+  const [paperExplainOverridesByDocument, setPaperExplainOverridesByDocument] = useState<Record<string, Record<string, BlockExplanation>>>({});
   const currentRequestIdRef = useRef<string | null>(null);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const chatBodyRef = useRef<HTMLDivElement | null>(null);
   const blockStackRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const documentBlocksRef = useRef<HTMLDivElement | null>(null);
+  const handledPaperAnalyzeTriggerRef = useRef<number>(0);
   const dragCandidateRef = useRef<{
     messageId: string;
     host: HTMLDivElement;
     message: ChatMessage;
     payload: DragInsertPayload;
     allowLiveSelection: boolean;
-    pendingBlockDrag: boolean;
     startX: number;
     startY: number;
   } | null>(null);
@@ -121,6 +146,15 @@ export function ReaderWorkspace({
     initialData: currentDocument ? { blocks: fallbackBlocks } : undefined
   });
 
+  const paperExplanationsQuery = useQuery({
+    queryKey: ["document-paper-explanations", currentDocument?.documentId],
+    queryFn: async () => listDocumentBlockExplanations({
+      documentId: currentDocument!.documentId,
+      mode: "paper"
+    }),
+    enabled: Boolean(currentDocument?.documentId)
+  });
+
   const blocks = blocksQuery.data?.blocks ?? [];
   const currentBlock = blocks.find((block) => block.blockId === selectedBlockId) ?? null;
   const referencedBlock = referencedBlockId
@@ -132,6 +166,27 @@ export function ReaderWorkspace({
       .filter((document): document is Document => Boolean(document)),
     [documents, openDocumentIds]
   );
+  const paperExplanationMap = useMemo(() => {
+    const currentOverrides = currentDocument
+      ? paperExplainOverridesByDocument[currentDocument.documentId] ?? {}
+      : {};
+    const merged = new Map<string, BlockExplanation>();
+    for (const explanation of paperExplanationsQuery.data?.explanations ?? []) {
+      if (!merged.has(explanation.blockId)) {
+        merged.set(explanation.blockId, explanation);
+      }
+    }
+    for (const [blockId, explanation] of Object.entries(currentOverrides)) {
+      merged.set(blockId, explanation);
+    }
+    return merged;
+  }, [currentDocument, paperExplanationsQuery.data?.explanations, paperExplainOverridesByDocument]);
+  const currentPaperExplainProgress = currentDocument
+    ? paperExplainProgressByDocument[currentDocument.documentId] ?? null
+    : null;
+  const currentPaperExplainStatuses = currentDocument
+    ? paperExplainStatusesByDocument[currentDocument.documentId] ?? {}
+    : {};
 
   useEffect(() => {
     setOpenDocumentIds((current) => {
@@ -158,6 +213,17 @@ export function ReaderWorkspace({
     setEditingBlockTitle("");
     setEditingBlockContent("");
   }, [currentDocument?.documentId]);
+
+  useEffect(() => {
+    if (paperAnalyzeTrigger <= handledPaperAnalyzeTriggerRef.current) {
+      return;
+    }
+    handledPaperAnalyzeTriggerRef.current = paperAnalyzeTrigger;
+    if (!currentDocument || blocks.length === 0) {
+      return;
+    }
+    void runPaperExplainBatch(blocks);
+  }, [blocks, currentDocument, paperAnalyzeTrigger]);
 
   useEffect(() => {
     if (!blocks.length) {
@@ -299,6 +365,108 @@ export function ReaderWorkspace({
       ...current,
       timeline: current.timeline.map((item) => item.id === itemId ? updater(item) : item)
     }));
+  }
+
+  async function runPaperExplainBatch(targetBlocks: Block[]) {
+    if (!currentDocument || targetBlocks.length === 0 || currentPaperExplainProgress?.active) {
+      return;
+    }
+    const documentId = currentDocument.documentId;
+
+    let completed = 0;
+    let failed = 0;
+    let running = 0;
+    const total = targetBlocks.length;
+    const queue = [...targetBlocks];
+    const concurrency = Math.min(4, Math.max(1, queue.length));
+
+    setPaperExplainOverridesByDocument((current) => ({
+      ...current,
+      [documentId]: {}
+    }));
+    setPaperExplainStatusesByDocument((current) => ({
+      ...current,
+      [documentId]: Object.fromEntries(targetBlocks.map((block) => [block.blockId, "idle" as const]))
+    }));
+    setPaperExplainProgressByDocument((current) => ({
+      ...current,
+      [documentId]: {
+        total,
+        completed: 0,
+        failed: 0,
+        running: 0,
+        active: true
+      }
+    }));
+
+    const syncProgress = () => {
+      setPaperExplainProgressByDocument((current) => ({
+        ...current,
+        [documentId]: {
+          total,
+          completed,
+          failed,
+          running,
+          active: completed + failed < total
+        }
+      }));
+    };
+
+    async function worker() {
+      while (queue.length > 0) {
+        const nextBlock = queue.shift();
+        if (!nextBlock) {
+          return;
+        }
+
+        running += 1;
+        setPaperExplainStatusesByDocument((current) => ({
+          ...current,
+          [documentId]: {
+            ...(current[documentId] ?? {}),
+            [nextBlock.blockId]: "running"
+          }
+        }));
+        syncProgress();
+
+        try {
+          const result = await explainBlock({
+            blockId: nextBlock.blockId,
+            mode: "paper"
+          });
+          completed += 1;
+          setPaperExplainOverridesByDocument((current) => ({
+            ...current,
+            [documentId]: {
+              ...(current[documentId] ?? {}),
+              [nextBlock.blockId]: result.explanation
+            }
+          }));
+          setPaperExplainStatusesByDocument((current) => ({
+            ...current,
+            [documentId]: {
+              ...(current[documentId] ?? {}),
+              [nextBlock.blockId]: "completed"
+            }
+          }));
+        } catch {
+          failed += 1;
+          setPaperExplainStatusesByDocument((current) => ({
+            ...current,
+            [documentId]: {
+              ...(current[documentId] ?? {}),
+              [nextBlock.blockId]: "failed"
+            }
+          }));
+        } finally {
+          running -= 1;
+          syncProgress();
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    await queryClient.invalidateQueries({ queryKey: ["document-paper-explanations", documentId] });
   }
 
   const readerStateMutation = useMutation({
@@ -633,7 +801,6 @@ export function ReaderWorkspace({
 
   function handleSelectBlock(block: Block) {
     setSelectedBlockId(block.blockId);
-    setReferencedBlockId(block.blockId);
   }
 
   function handleStartEditBlock(block: Block) {
@@ -727,6 +894,28 @@ export function ReaderWorkspace({
     };
   }
 
+  function canStartSelectionDrag(host: HTMLDivElement, target: HTMLElement) {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0) {
+      return false;
+    }
+
+    const selectedText = selection.toString().trim();
+    if (!selectedText) {
+      return false;
+    }
+
+    const anchorInside = host.contains(selection.anchorNode);
+    const focusInside = host.contains(selection.focusNode);
+    if (!anchorInside || !focusInside) {
+      return false;
+    }
+
+    const range = selection.getRangeAt(0);
+    const commonAncestor = range.commonAncestorContainer;
+    return target.contains(commonAncestor) || target.contains(selection.anchorNode) || target.contains(selection.focusNode);
+  }
+
   function resolveDropIndex(clientY: number) {
     if (!blocks.length) {
       return 0;
@@ -747,27 +936,24 @@ export function ReaderWorkspace({
 
     return blocks.length;
   }
-  function handleAssistantMouseDown(event: React.MouseEvent<HTMLDivElement>, message: ChatMessage) {
+  function handleAssistantBlockDragMouseDown(event: React.MouseEvent<HTMLButtonElement>, message: ChatMessage) {
     if (event.button !== 0) {
       return;
     }
-    const target = event.target as HTMLElement;
-    if (target.closest("button, a")) {
+
+    event.preventDefault();
+    event.stopPropagation();
+    const host = event.currentTarget.closest(".chat-message-card") as HTMLDivElement | null;
+    if (!host) {
       return;
     }
-
-    const host = event.currentTarget;
-    const initialPayload = buildDragPayload(host, message);
-    const hasSelection = initialPayload.sourceKind === "selection";
-    const startedInsideContent = Boolean(target.closest(".chat-message-content"));
-    const startedOnTextualElement = Boolean(target.closest("p, li, h1, h2, h3, strong, code, span"));
-    const startedFromBlockSurface = Boolean(target.closest(".chat-message-role")) || !startedInsideContent || !startedOnTextualElement;
-
-    if (startedFromBlockSurface && !hasSelection) {
-      event.preventDefault();
-      document.body.classList.add("is-note-drag-pending");
-      window.getSelection()?.removeAllRanges();
-    }
+    const initialPayload = {
+      contentMd: message.content,
+      title: (message.content.split("\n").find((line) => line.trim()) ?? "AI 笔记").replace(/^#+\s*/, "").trim().slice(0, 36) || "AI 笔记",
+      sourceKind: "block" as const
+    };
+    document.body.classList.add("is-note-drag-pending");
+    window.getSelection()?.removeAllRanges();
 
     dragPointerRef.current = { x: event.clientX, y: event.clientY };
     dragCandidateRef.current = {
@@ -775,8 +961,41 @@ export function ReaderWorkspace({
       host,
       message,
       payload: initialPayload,
-      allowLiveSelection: startedInsideContent,
-      pendingBlockDrag: startedFromBlockSurface,
+      allowLiveSelection: false,
+      startX: event.clientX,
+      startY: event.clientY
+    };
+  }
+
+  function handleAssistantSelectionMouseDown(event: React.MouseEvent<HTMLDivElement>, message: ChatMessage) {
+    if (event.button !== 0) {
+      return;
+    }
+
+    const host = event.currentTarget.closest(".chat-message-card") as HTMLDivElement | null;
+    if (!host) {
+      return;
+    }
+
+    const target = event.target as HTMLElement;
+    if (!canStartSelectionDrag(host, target)) {
+      return;
+    }
+
+    const initialPayload = buildDragPayload(host, message);
+    if (initialPayload.sourceKind !== "selection") {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    dragPointerRef.current = { x: event.clientX, y: event.clientY };
+    dragCandidateRef.current = {
+      messageId: message.id,
+      host,
+      message,
+      payload: initialPayload,
+      allowLiveSelection: false,
       startX: event.clientX,
       startY: event.clientY
     };
@@ -828,6 +1047,31 @@ export function ReaderWorkspace({
                   <div className="surface-empty">当前文档还没有生成可阅读的块。</div>
                 ) : (
                   <div className="document-blocks" ref={documentBlocksRef}>
+                    {currentPaperExplainProgress ? (
+                      <div className="paper-analysis-progress">
+                        <div className="paper-analysis-progress-header">
+                          <span>全文论文解析</span>
+                          <span>
+                            {currentPaperExplainProgress.completed + currentPaperExplainProgress.failed}/{currentPaperExplainProgress.total}
+                          </span>
+                        </div>
+                        <div className="paper-analysis-progress-bar">
+                          <div
+                            className="paper-analysis-progress-bar-fill"
+                            style={{
+                              width: `${currentPaperExplainProgress.total === 0
+                                ? 0
+                                : Math.round(((currentPaperExplainProgress.completed + currentPaperExplainProgress.failed) / currentPaperExplainProgress.total) * 100)}%`
+                            }}
+                          />
+                        </div>
+                        <div className="paper-analysis-progress-meta">
+                          <span>已完成 {currentPaperExplainProgress.completed}</span>
+                          <span>解析中 {currentPaperExplainProgress.running}</span>
+                          <span>失败 {currentPaperExplainProgress.failed}</span>
+                        </div>
+                      </div>
+                    ) : null}
                     {blocks.map((block, index) => (
                       <div
                         key={block.blockId}
@@ -947,7 +1191,13 @@ export function ReaderWorkspace({
                               </div>
                             </div>
                           ) : (
-                            <MarkdownArticle content={block.contentMd} />
+                            <>
+                              <MarkdownArticle content={block.contentMd} />
+                              <PaperExplainPanel
+                                explanation={paperExplanationMap.get(block.blockId) ?? null}
+                                status={currentPaperExplainStatuses[block.blockId] ?? "idle"}
+                              />
+                            </>
                           )}
                         </section>
                       </div>
@@ -984,24 +1234,39 @@ export function ReaderWorkspace({
                     ].filter(Boolean).join(" ")
                     : `chat-message chat-message-${message.role}`
                 }
-                onMouseDown={(event) => {
-                  if (message.role !== "assistant") {
-                    return;
-                  }
-                  handleAssistantMouseDown(event, message);
-                }}
                 onDragEnd={() => {
                   setDropIndex(null);
                   setDraggingMessageId(null);
                 }}
               >
-                <div className="chat-message-role">{message.role === "assistant" ? "AI" : "你"}</div>
+                <div className="chat-message-head">
+                  <div className="chat-message-role">{message.role === "assistant" ? "AI" : "你"}</div>
+                  {message.role === "assistant" ? (
+                    <button
+                      className="chat-message-drag-handle"
+                      onMouseDown={(event) => handleAssistantBlockDragMouseDown(event, message)}
+                      aria-label="拖动整块回复"
+                      title="拖动整块回复"
+                    >
+                      <SvgGripIcon />
+                    </button>
+                  ) : null}
+                </div>
                 <div
+                  onDragStart={(event) => {
+                    event.preventDefault();
+                  }}
                   className={
                     message.isStreaming
                       ? "chat-message-content chat-message-content-streaming"
                       : "chat-message-content"
                   }
+                  onMouseDown={(event) => {
+                    if (message.role !== "assistant") {
+                      return;
+                    }
+                    handleAssistantSelectionMouseDown(event, message);
+                  }}
                 >
                   {message.mode === "agent" && message.agentState ? (
                     <div className="agent-chat-card">
@@ -1180,6 +1445,107 @@ function buildAgentFailureText(audit: GetAgentAuditOutput) {
   return lastError?.message ?? "任务执行失败。";
 }
 
+function PaperExplainPanel({
+  explanation,
+  status
+}: {
+  explanation: BlockExplanation | null;
+  status: "idle" | "running" | "completed" | "failed";
+}) {
+  if (!explanation && status === "idle") {
+    return null;
+  }
+
+  if (!explanation && status === "running") {
+    return (
+      <div className="paper-explain-panel paper-explain-panel-pending">
+        <div className="paper-explain-header">
+          <span className="paper-explain-title">论文解析</span>
+          <span className="paper-explain-status">解析中</span>
+        </div>
+        <div className="paper-explain-shimmer" />
+      </div>
+    );
+  }
+
+  if (!explanation && status === "failed") {
+    return (
+      <div className="paper-explain-panel paper-explain-panel-failed">
+        <div className="paper-explain-header">
+          <span className="paper-explain-title">论文解析</span>
+          <span className="paper-explain-status">失败</span>
+        </div>
+        <div className="paper-explain-text">当前块解析失败，你可以再次触发全文解析。</div>
+      </div>
+    );
+  }
+
+  if (!explanation) {
+    return null;
+  }
+
+  const parsed = parsePaperExplanation(explanation);
+  return (
+    <div className="paper-explain-panel">
+      <div className="paper-explain-header">
+        <span className="paper-explain-title">论文解析</span>
+        <span className="paper-explain-status">{formatPaperConfidence(parsed.confidence)}</span>
+      </div>
+      <div className="paper-explain-section">
+        <div className="paper-explain-label">核心解读</div>
+        <div className="paper-explain-text">{parsed.summary}</div>
+      </div>
+      <div className="paper-explain-section-grid">
+        <div className="paper-explain-section">
+          <div className="paper-explain-label">在论文中的作用</div>
+          <div className="paper-explain-text">{parsed.roleInPaper}</div>
+        </div>
+        <div className="paper-explain-section">
+          <div className="paper-explain-label">白话解释</div>
+          <div className="paper-explain-text">{parsed.plainExplanation}</div>
+        </div>
+      </div>
+      {parsed.keyPoints.length > 0 ? (
+        <div className="paper-explain-section">
+          <div className="paper-explain-label">关键要点</div>
+          <ul className="paper-explain-list">
+            {parsed.keyPoints.map((item, index) => (
+              <li key={`${index}-${item}`}>{item}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {parsed.terms.length > 0 ? (
+        <div className="paper-explain-section">
+          <div className="paper-explain-label">术语解释</div>
+          <div className="paper-explain-terms">
+            {parsed.terms.map((item, index) => (
+              <div key={`${item.term}-${index}`} className="paper-explain-term">
+                <div className="paper-explain-term-name">{item.term}</div>
+                <div className="paper-explain-term-text">{item.explanation}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <div className="paper-explain-section-grid">
+        <div className="paper-explain-section">
+          <div className="paper-explain-label">方法或逻辑</div>
+          <div className="paper-explain-text">{parsed.methodOrLogic}</div>
+        </div>
+        <div className="paper-explain-section">
+          <div className="paper-explain-label">证据或现象</div>
+          <div className="paper-explain-text">{parsed.evidence}</div>
+        </div>
+      </div>
+      <div className="paper-explain-section">
+        <div className="paper-explain-label">假设与限制</div>
+        <div className="paper-explain-text">{parsed.assumptionsOrLimits}</div>
+      </div>
+    </div>
+  );
+}
+
 function summarizeAgentFileActions(audit: GetAgentAuditOutput) {
   const taskText = audit.task.taskText;
   const actionLines: string[] = [];
@@ -1242,6 +1608,194 @@ function safeParseJson(input: string) {
   }
 }
 
+function parsePaperExplanation(explanation: BlockExplanation): PaperExplainViewModel {
+  const parsed = safeParsePaperJson(explanation.rawResponseJson);
+  const parsedContent = parsed?.parsed_content ?? null;
+  return {
+    summary:
+      parsed?.summary
+      ?? readPaperString(parsedContent, ["what_is_this_block_about", "当前块主题", "说明当前块到底在讲什么", "当前块内容概述"])
+      ?? explanation.summary
+      ?? "当前块已完成解析。",
+    roleInPaper:
+      parsed?.roleInPaper
+      ?? readPaperString(parsedContent, ["role_in_paper", "在论文中的作用", "在论文整体中的作用"])
+      ?? explanation.roleInDocument
+      ?? "当前块未提供充分信息",
+    keyPoints:
+      parsed?.keyPoints
+      ?? readPaperStringArray(parsedContent, ["key_points", "最重要要点", "最重要的要点"])
+      ?? [],
+    terms:
+      parsed?.terms
+      ?? readPaperTerms(parsedContent, ["terms", "key_terms", "关键术语解释"])
+      ?? [],
+    methodOrLogic:
+      parsed?.methodOrLogic
+      ?? readPaperString(parsedContent, ["method_or_logic", "core_logic_if_method", "core_logic_if_method_or_experiment", "core_logic_if_applicable", "核心逻辑", "核心逻辑或证据"])
+      ?? "当前块未提供充分信息",
+    evidence:
+      parsed?.evidence
+      ?? readPaperString(parsedContent, ["evidence", "evidence_if_applicable", "evidence_if_results", "evidence_if_results_or_observations", "证据或结果", "证据或现象"])
+      ?? "当前块未提供充分信息",
+    assumptionsOrLimits:
+      parsed?.assumptionsOrLimits
+      ?? readPaperString(parsedContent, ["assumptions_or_limits", "assumptions_limitations", "assumptions_limitations_boundaries", "assumptions_limitations_if_applicable", "假设、限制或边界条件"])
+      ?? "当前块未体现",
+    plainExplanation:
+      parsed?.plainExplanation
+      ?? readPaperString(parsedContent, ["plain_language_explanation", "plain_explanation", "直白解释"])
+      ?? parsed?.summary
+      ?? readPaperString(parsedContent, ["what_is_this_block_about", "当前块主题", "说明当前块到底在讲什么", "当前块内容概述"])
+      ?? explanation.summary,
+    confidence: parsed?.confidence ?? "medium"
+  };
+}
+
+function safeParsePaperJson(input: string) {
+  try {
+    return JSON.parse(input) as {
+      summary?: string;
+      roleInPaper?: string;
+      keyPoints?: string[];
+      terms?: { term: string; explanation: string }[];
+      methodOrLogic?: string;
+      evidence?: string;
+      assumptionsOrLimits?: string;
+      plainExplanation?: string;
+      confidence?: string;
+      parsed_content?: Record<string, unknown>;
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeKeyPointsFromText(value: unknown) {
+  if (!value || typeof value !== "string") {
+    return null;
+  }
+  const items = value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .map((line) => line.replace(/^[\d.\-•\s]+/, "").trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : null;
+}
+
+function readPaperString(
+  source: Record<string, unknown> | null | undefined,
+  keys: string[]
+) {
+  if (!source) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = source[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function readPaperStringArray(
+  source: Record<string, unknown> | null | undefined,
+  keys: string[]
+) {
+  if (!source) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = source[key];
+    if (Array.isArray(value)) {
+      const items = value
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter(Boolean);
+      if (items.length > 0) {
+        return items;
+      }
+    }
+    const normalized = normalizeKeyPointsFromText(value);
+    if (normalized && normalized.length > 0) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+function readPaperTerms(
+  source: Record<string, unknown> | null | undefined,
+  keys: string[]
+) {
+  if (!source) {
+    return null;
+  }
+  for (const key of keys) {
+    const value = source[key];
+    const normalized = normalizeTermsFromUnknown(value);
+    if (normalized && normalized.length > 0) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+function normalizeTermsFromUnknown(value: unknown) {
+  if (!value) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    const items = value
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") {
+          return null;
+        }
+        const term = typeof (entry as { term?: unknown }).term === "string" ? (entry as { term: string }).term : "";
+        const explanation = typeof (entry as { explanation?: unknown }).explanation === "string" ? (entry as { explanation: string }).explanation : "";
+        return term ? { term, explanation } : null;
+      })
+      .filter((item): item is { term: string; explanation: string } => Boolean(item));
+    return items.length > 0 ? items : null;
+  }
+  if (typeof value === "object") {
+    const items = Object.entries(value as Record<string, unknown>)
+      .map(([term, explanation]) => ({
+        term,
+        explanation: typeof explanation === "string" ? explanation : ""
+      }))
+      .filter((item) => item.term.trim().length > 0);
+    return items.length > 0 ? items : null;
+  }
+  if (typeof value === "string") {
+    const items = value
+      .split(/\r?\n/)
+      .map((line) => line.trim().replace(/^[\d.\-•\s]+/, "").trim())
+      .filter(Boolean)
+      .map((line) => {
+        const [term, explanation = ""] = line.split(/：|:/, 2);
+        return {
+          term: term.trim(),
+          explanation: explanation.trim()
+        };
+      })
+      .filter((item) => item.term.length > 0);
+    return items.length > 0 ? items : null;
+  }
+  return null;
+}
+
+function formatPaperConfidence(confidence: string) {
+  if (confidence === "high") {
+    return "高可信";
+  }
+  if (confidence === "low") {
+    return "低可信";
+  }
+  return "中可信";
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => {
     window.setTimeout(resolve, ms);
@@ -1295,6 +1849,19 @@ function SvgQuoteIcon() {
     <svg className="inline-action-icon" viewBox="0 0 16 16" aria-hidden="true">
       <path d="M5.7 5.2H3.8V8.1H6.1V10.8H3.4V8.7C3.4 6.6 4.2 5.4 5.7 5.2Z" />
       <path d="M11.8 5.2H9.9V8.1H12.2V10.8H9.5V8.7C9.5 6.6 10.3 5.4 11.8 5.2Z" />
+    </svg>
+  );
+}
+
+function SvgGripIcon() {
+  return (
+    <svg className="inline-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="5" cy="4.5" r="0.9" />
+      <circle cx="11" cy="4.5" r="0.9" />
+      <circle cx="5" cy="8" r="0.9" />
+      <circle cx="11" cy="8" r="0.9" />
+      <circle cx="5" cy="11.5" r="0.9" />
+      <circle cx="11" cy="11.5" r="0.9" />
     </svg>
   );
 }

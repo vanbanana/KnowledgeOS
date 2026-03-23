@@ -21,6 +21,8 @@ import {
   getSubgraphOutputSchema,
   listBlocksOutputSchema,
   listBlockExplanationsOutputSchema,
+  listDocumentBlockExplanationsInputSchema,
+  listDocumentBlockExplanationsOutputSchema,
   listCardsOutputSchema,
   createProjectInputSchema,
   createProjectOutputSchema,
@@ -52,6 +54,12 @@ import {
   saveCardInputSchema,
   searchInputSchema,
   searchOutputSchema,
+  createStudioArtifactInputSchema,
+  studioArtifactCommandOutputSchema,
+  listStudioArtifactsInputSchema,
+  listStudioArtifactsOutputSchema,
+  generateStudioArtifactInputSchema,
+  getStudioArtifactInputSchema,
   suggestRelationsInputSchema,
   suggestRelationsOutputSchema,
   listProjectsOutputSchema,
@@ -168,6 +176,11 @@ export const desktopCommandSchemas = {
     }),
     output: listBlockExplanationsOutputSchema
   },
+  blockExplainDocumentList: {
+    command: "list_document_block_explanations_command",
+    input: listDocumentBlockExplanationsInputSchema,
+    output: listDocumentBlockExplanationsOutputSchema
+  },
   explainTemplateList: {
     command: "list_explain_templates_command",
     input: z.undefined(),
@@ -283,6 +296,26 @@ export const desktopCommandSchemas = {
     command: "get_agent_audit_command",
     input: agentTaskIdInputSchema,
     output: getAgentAuditOutputSchema
+  },
+  studioCreate: {
+    command: "create_studio_artifact_command",
+    input: createStudioArtifactInputSchema,
+    output: studioArtifactCommandOutputSchema
+  },
+  studioGenerate: {
+    command: "generate_studio_artifact_command",
+    input: generateStudioArtifactInputSchema,
+    output: studioArtifactCommandOutputSchema
+  },
+  studioList: {
+    command: "list_studio_artifacts_command",
+    input: listStudioArtifactsInputSchema,
+    output: listStudioArtifactsOutputSchema
+  },
+  studioGet: {
+    command: "get_studio_artifact_command",
+    input: getStudioArtifactInputSchema,
+    output: studioArtifactCommandOutputSchema
   },
   jobEnqueueMock: {
     command: "enqueue_mock_job",

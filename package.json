@@ -4,17 +4,17 @@
   "private": true,
   "packageManager": "pnpm@10.30.2",
   "scripts": {
-    "dev": "pnpm --filter @knowledgeos/desktop dev",
-    "tauri:dev": "pnpm --filter @knowledgeos/desktop tauri dev",
-    "build": "pnpm -r build",
-    "lint": "pnpm -r lint",
-    "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test",
-    "check": "pnpm lint && pnpm typecheck && pnpm test"
+    "dev": "corepack pnpm --filter @knowledgeos/desktop dev",
+    "tauri:dev": "corepack pnpm --filter @knowledgeos/desktop tauri dev",
+    "start:desktop": "cmd /c start-knowledgeos.cmd",
+    "build": "corepack pnpm -r build",
+    "lint": "corepack pnpm -r lint",
+    "typecheck": "corepack pnpm -r typecheck",
+    "test": "corepack pnpm -r test",
+    "check": "corepack pnpm lint && corepack pnpm typecheck && corepack pnpm test"
   },
   "devDependencies": {
     "@types/node": "^24.6.0",
     "typescript": "^5.9.3"
   }
 }
-

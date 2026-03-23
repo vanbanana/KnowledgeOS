@@ -14,12 +14,15 @@ import type {
   GetSubgraphOutput,
   ListBlocksOutput,
   ListBlockExplanationsOutput,
+  ListDocumentBlockExplanationsInput,
+  ListDocumentBlockExplanationsOutput,
   ListCardsOutput,
   ListAgentTaskLogsOutput,
   ListAgentTasksInput,
   ListAgentTasksOutput,
   CreateProjectInput,
   CreateProjectOutput,
+  CreateStudioArtifactInput,
   DeleteBlockInput,
   DeleteBlockOutput,
   DeleteDocumentInput,
@@ -28,6 +31,10 @@ import type {
   DeleteProjectOutput,
   EnqueueJobInput,
   EnqueueJobOutput,
+  GenerateStudioArtifactInput,
+  ListStudioArtifactsInput,
+  ListStudioArtifactsOutput,
+  StudioArtifactCommandOutput,
   ImportFilesInput,
   ImportFilesOutput,
   InsertNoteBlockInput,
@@ -129,6 +136,12 @@ export async function listBlockExplanations(blockId: string): Promise<ListBlockE
   return invokeTyped(desktopCommandSchemas.blockExplainList, { blockId });
 }
 
+export async function listDocumentBlockExplanations(
+  input: ListDocumentBlockExplanationsInput
+): Promise<ListDocumentBlockExplanationsOutput> {
+  return invokeTyped(desktopCommandSchemas.blockExplainDocumentList, input);
+}
+
 export async function listExplainTemplates(): Promise<ListExplainTemplatesOutput> {
   return invokeTyped(desktopCommandSchemas.explainTemplateList, undefined);
 }
@@ -216,6 +229,26 @@ export async function listAgentTaskLogs(taskId: string): Promise<ListAgentTaskLo
 
 export async function getAgentAudit(taskId: string): Promise<GetAgentAuditOutput> {
   return invokeTyped(desktopCommandSchemas.agentAudit, { taskId });
+}
+
+export async function createStudioArtifact(input: CreateStudioArtifactInput): Promise<StudioArtifactCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.studioCreate, input);
+}
+
+export async function generateStudioArtifact(
+  input: GenerateStudioArtifactInput
+): Promise<StudioArtifactCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.studioGenerate, input);
+}
+
+export async function listStudioArtifacts(
+  input: ListStudioArtifactsInput
+): Promise<ListStudioArtifactsOutput> {
+  return invokeTyped(desktopCommandSchemas.studioList, input);
+}
+
+export async function getStudioArtifact(artifactId: string): Promise<StudioArtifactCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.studioGet, { artifactId });
 }
 
 export async function enqueueMockJob(input: EnqueueJobInput): Promise<EnqueueJobOutput> {
