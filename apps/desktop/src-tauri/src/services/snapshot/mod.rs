@@ -48,7 +48,11 @@ pub fn create_file_snapshot(
         fs::copy(file_path, &backup_path).map_err(|error| error.to_string())?;
         let bytes = fs::read(file_path).map_err(|error| error.to_string())?;
         let hash = format!("{:x}", Sha256::digest(&bytes));
-        (true, Some(hash), Some(backup_path.to_string_lossy().into_owned()))
+        (
+            true,
+            Some(hash),
+            Some(backup_path.to_string_lossy().into_owned()),
+        )
     } else {
         (false, None, None)
     };
@@ -96,7 +100,13 @@ pub fn snapshot_document(
     document_id: &str,
 ) -> Result<SnapshotRecord, String> {
     let document = get_document(connection, document_id).map_err(|error| error.to_string())?;
-    create_record_snapshot(connection, task_id, "document", document_id, document.as_ref())
+    create_record_snapshot(
+        connection,
+        task_id,
+        "document",
+        document_id,
+        document.as_ref(),
+    )
 }
 
 pub fn create_snapshot_record(

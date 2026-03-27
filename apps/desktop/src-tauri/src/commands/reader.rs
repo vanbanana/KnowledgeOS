@@ -120,30 +120,30 @@ pub async fn chat_with_block_command(
     let response = stream_text_completion(
         &model_settings,
         &ModelRequest {
-        task_type: "reader.chat".to_string(),
-        provider: model_settings.provider.clone(),
-        model: model_settings.tool_model.clone(),
-        system_prompt,
-        prompt,
-        output_format: "text".to_string(),
-        context_blocks: block
-            .as_ref()
-            .map(|item| vec![item.content_md.clone()])
-            .unwrap_or_default(),
-        metadata_json: block
-            .as_ref()
-            .map(|item| {
-                serde_json::json!({
-                    "blockId": item.block_id,
-                    "documentId": item.document_id,
-                    "projectId": item.project_id
+            task_type: "reader.chat".to_string(),
+            provider: model_settings.provider.clone(),
+            model: model_settings.tool_model.clone(),
+            system_prompt,
+            prompt,
+            output_format: "text".to_string(),
+            context_blocks: block
+                .as_ref()
+                .map(|item| vec![item.content_md.clone()])
+                .unwrap_or_default(),
+            metadata_json: block
+                .as_ref()
+                .map(|item| {
+                    serde_json::json!({
+                        "blockId": item.block_id,
+                        "documentId": item.document_id,
+                        "projectId": item.project_id
+                    })
+                    .to_string()
                 })
-                .to_string()
-            })
-            .unwrap_or_else(|| "{}".to_string()),
-        temperature: 0.3,
-        max_output_tokens: 1200,
-    },
+                .unwrap_or_else(|| "{}".to_string()),
+            temperature: 0.3,
+            max_output_tokens: 1200,
+        },
         |chunk| {
             app.emit(
                 "reader-chat-stream",
@@ -258,8 +258,7 @@ fn build_chat_user_prompt(
     } else {
         format!(
             "当前没有知识块上下文。\n最近对话：\n{}\n\n用户问题：{}\n\n请直接给出最终回答。",
-            history_text,
-            normalized_question
+            history_text, normalized_question
         )
     }
 }

@@ -29,14 +29,19 @@ use commands::explain::{
     regenerate_block_explanation_command,
 };
 use commands::graph::{
-    confirm_relation_command, get_subgraph_command, remove_relation_command,
-    suggest_relations_command, upsert_relation_command,
+    confirm_relation_command, get_subgraph_command, graph_rag_query_command,
+    remove_relation_command, suggest_relations_command, upsert_relation_command,
 };
-use commands::import::{delete_document_command, import_files_command, list_documents_command};
+use commands::import::{
+    delete_document_command, get_document_parse_progress_command, get_document_pdf_bytes_command,
+    import_files_command, list_documents_command,
+};
 use commands::jobs::{
     cancel_job_command, enqueue_mock_job, list_jobs, retry_job_command, run_job_command,
 };
-use commands::project::{create_project, delete_project, list_projects, open_project, rename_project};
+use commands::project::{
+    create_project, delete_project, list_projects, open_project, rename_project,
+};
 use commands::reader::{
     chat_with_block_command, get_source_preview_command, upsert_reader_state_command,
 };
@@ -46,7 +51,7 @@ use commands::studio::{
     list_studio_artifacts_command,
 };
 use commands::window::{
-    close_window_command, minimize_window_command, start_window_drag_command,
+    close_window_command, minimize_window_command, open_path_command, start_window_drag_command,
     toggle_maximize_window_command,
 };
 use state::AppState;
@@ -68,6 +73,8 @@ fn main() {
             import_files_command,
             list_documents_command,
             delete_document_command,
+            get_document_parse_progress_command,
+            get_document_pdf_bytes_command,
             list_blocks_command,
             update_block_command,
             delete_block_command,
@@ -83,6 +90,7 @@ fn main() {
             search_project_command,
             hybrid_search_project_command,
             get_subgraph_command,
+            graph_rag_query_command,
             suggest_relations_command,
             upsert_relation_command,
             confirm_relation_command,
@@ -105,6 +113,7 @@ fn main() {
             minimize_window_command,
             toggle_maximize_window_command,
             close_window_command,
+            open_path_command,
             enqueue_mock_job,
             list_jobs,
             run_job_command,
@@ -112,5 +121,5 @@ fn main() {
             cancel_job_command
         ])
         .run(tauri::generate_context!())
-        .expect("运行 KnowledgeOS 失败");
+        .expect("运行 KnowFlow 失败");
 }

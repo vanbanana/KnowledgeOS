@@ -5,8 +5,11 @@
   "packageManager": "pnpm@10.30.2",
   "scripts": {
     "dev": "corepack pnpm --filter @knowledgeos/desktop dev",
-    "tauri:dev": "corepack pnpm --filter @knowledgeos/desktop tauri dev",
+    "tauri:dev": "powershell -ExecutionPolicy Bypass -File ./apps/desktop/scripts/dev-reset.ps1 && corepack pnpm --filter @knowledgeos/desktop tauri dev",
     "start:desktop": "cmd /c start-knowledgeos.cmd",
+    "release:desktop": "corepack pnpm --filter @knowledgeos/desktop run release:build",
+    "release:test:desktop": "corepack pnpm --filter @knowledgeos/desktop run release:test",
+    "release:smoke-install:desktop": "corepack pnpm --filter @knowledgeos/desktop run release:smoke-install",
     "build": "corepack pnpm -r build",
     "lint": "corepack pnpm -r lint",
     "typecheck": "corepack pnpm -r typecheck",

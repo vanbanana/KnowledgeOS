@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::services::project::{
     ProjectRecord, create_project_record, delete_project as remove_project, get_project,
-    initialize_project_directories, list_projects as query_projects, rename_project as update_project,
+    initialize_project_directories, list_projects as query_projects,
+    rename_project as update_project,
 };
 use crate::state::AppState;
 

@@ -17,14 +17,14 @@ import {
   runJob
 } from "../lib/commands/client";
 import { AgentWorkspace } from "./AgentWorkspace";
-import { CardsWorkspace } from "./CardsWorkspace";
-import { GraphWorkspace } from "./GraphWorkspace";
+import { Graph3DWorkspace } from "./Graph3DWorkspace";
 import { KnowledgeGraphWorkspace } from "./KnowledgeGraphWorkspace";
 import { MindMapWorkspace } from "./MindMapWorkspace";
+import { PdfReaderWorkspace } from "./PdfReaderWorkspace";
 import { PracticeSetWorkspace } from "./PracticeSetWorkspace";
 import { PresentationWorkspace } from "./PresentationWorkspace";
 import { ReaderWorkspace } from "./ReaderWorkspace";
-import { StudioWorkspace } from "./StudioWorkspace";
+import { StudioDockPanel } from "./StudioDockPanel";
 
 interface DashboardProps {
   bootstrap: {
@@ -52,6 +52,13 @@ interface ImportProgressState {
   summary: string;
 }
 
+interface DocumentParseProgress {
+  phase: string;
+  message?: string;
+  currentPage?: number;
+  totalPages?: number;
+}
+
 export function Dashboard({ bootstrap }: DashboardProps) {
   const queryClient = useQueryClient();
   const [importPaths, setImportPaths] = useState<string[]>([]);
@@ -59,7 +66,7 @@ export function Dashboard({ bootstrap }: DashboardProps) {
   const [importProgress, setImportProgress] = useState<ImportProgressState | null>(null);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(bootstrap.projects[0]?.projectId ?? null);
   const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
-  const [currentView, setCurrentView] = useState<"项目" | "阅读器" | "Studio" | "知识网络" | "练习题" | "思维导图" | "演示文稿" | "卡片" | "图谱" | "Agent">("阅读器");
+  const [currentView, setCurrentView] = useState<"阅读器" | "知识网络" | "练习题" | "思维导图" | "演示文稿" | "图谱" | "Agent">("阅读器");
   const [selectedKnowledgeGraphArtifactId, setSelectedKnowledgeGraphArtifactId] = useState<string | null>(null);
   const [selectedPracticeSetArtifactId, setSelectedPracticeSetArtifactId] = useState<string | null>(null);
   const [selectedMindMapArtifactId, setSelectedMindMapArtifactId] = useState<string | null>(null);
@@ -71,6 +78,9 @@ export function Dashboard({ bootstrap }: DashboardProps) {
   const [renameDraft, setRenameDraft] = useState("");
   const [collapsedProjectIds, setCollapsedProjectIds] = useState<string[]>([]);
   const [paperAnalyzeTrigger, setPaperAnalyzeTrigger] = useState(0);
+  const [secondaryPanelKind, setSecondaryPanelKind] = useState<"studio" | null>(null);
+  const [viewportWidth, setViewportWidth] = useState(() => Math.max(360, window.innerWidth));
+  const [isLibraryDrawerOpen, setIsLibraryDrawerOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentProject =
@@ -80,6 +90,9 @@ export function Dashboard({ bootstrap }: DashboardProps) {
     : [];
   const currentDocument =
     projectDocuments.find((document) => document.documentId === selectedDocumentId) ?? projectDocuments[0] ?? null;
+  const isGraphView = currentView === "图谱";
+  const isCompactLayout = viewportWidth <= 760;
+  const showLibraryPane = !isGraphView && (!isCompactLayout || isLibraryDrawerOpen);
 
   const searchQuery = useQuery({
     queryKey: ["hybrid-search", currentProject?.projectId, searchText],
@@ -91,7 +104,7 @@ export function Dashboard({ bootstrap }: DashboardProps) {
     mutationFn: async () =>
       createProject({
         name: `项目 ${bootstrap.projects.length + 1}`,
-        description: "KnowledgeOS 工作站项目"
+        description: "KnowFlow 工作站项目"
       }),
     onSuccess: async (result) => {
       setSelectedProjectId(result.project.projectId);
@@ -155,8 +168,24 @@ export function Dashboard({ bootstrap }: DashboardProps) {
         projectId: currentProject.projectId,
         paths
       });
-      setImportProgress(buildImportProgress(result.documents));
-      await processImportPipeline(currentProject.projectId, result.documents.map((item) => item.documentId));
+      const quickProgress = buildImportProgress(result.documents);
+      setImportProgress({
+        ...quickProgress,
+        currentStage: "文件已导入，正在后台解析",
+        summary: "已完成秒级导入，正文与分块会在后台持续生成。"
+      });
+      const latestImportedDocument = result.documents.at(0) ?? null;
+      if (latestImportedDocument) {
+        setSelectedDocumentId(latestImportedDocument.documentId);
+        setCurrentView("阅读器");
+      }
+      void processImportPipeline(
+        currentProject.projectId,
+        result.documents.map((item) => item.documentId)
+      ).catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : "导入后台任务执行失败";
+        setImportFeedback(message);
+      });
       return result;
     },
     onSuccess: async (result) => {
@@ -170,6 +199,23 @@ export function Dashboard({ bootstrap }: DashboardProps) {
       setImportFeedback(error.message);
     }
   });
+
+  useEffect(() => {
+    const syncViewportWidth = () => {
+      setViewportWidth(Math.max(360, window.innerWidth));
+    };
+    syncViewportWidth();
+    window.addEventListener("resize", syncViewportWidth);
+    return () => {
+      window.removeEventListener("resize", syncViewportWidth);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isCompactLayout || isGraphView) {
+      setIsLibraryDrawerOpen(false);
+    }
+  }, [isCompactLayout, isGraphView]);
 
   useEffect(() => {
     const closeMenu = (event: PointerEvent) => {
@@ -239,11 +285,14 @@ export function Dashboard({ bootstrap }: DashboardProps) {
   }, []);
 
   async function processImportPipeline(projectId: string, importedDocumentIds: string[]) {
+    const dispatchedJobIds = new Set<string>();
     await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
-    for (let round = 0; round < 24; round += 1) {
+    for (let round = 0; round < 720; round += 1) {
       const [documentsResult, jobResult] = await Promise.all([listDocuments(projectId), listJobs()]);
       const importingDocuments = documentsResult.documents.filter((item) => importedDocumentIds.includes(item.documentId));
-      setImportProgress(buildImportProgress(importingDocuments));
+      const baseProgress = buildImportProgress(importingDocuments);
+      const detailProgress = await buildDetailedImportProgress(importedDocumentIds, baseProgress);
+      setImportProgress(detailProgress);
 
       const pendingJobs = jobResult.jobs.filter(
         (job) =>
@@ -251,30 +300,91 @@ export function Dashboard({ bootstrap }: DashboardProps) {
           && (job.kind === "document.parse" || job.kind === "document.chunk")
           && importedDocumentIds.some((documentId) => job.payloadJson.includes(documentId))
       );
+      const activeJobs = jobResult.jobs.filter(
+        (job) =>
+          (job.status === "pending" || job.status === "running")
+          && (job.kind === "document.parse" || job.kind === "document.chunk")
+          && importedDocumentIds.some((documentId) => job.payloadJson.includes(documentId))
+      );
       const allFinished = importingDocuments.every((item) =>
         ["chunked", "indexed", "ready", "failed"].includes(item.parseStatus)
       );
 
-      if (pendingJobs.length === 0 && allFinished) {
+      if (activeJobs.length === 0 && allFinished) {
         break;
       }
 
       if (pendingJobs.length > 0) {
-        await Promise.allSettled(pendingJobs.map((job) => runJob({ jobId: job.jobId })));
-      } else {
-        await new Promise((resolve) => window.setTimeout(resolve, 240));
+        for (const job of pendingJobs) {
+          if (dispatchedJobIds.has(job.jobId)) {
+            continue;
+          }
+          dispatchedJobIds.add(job.jobId);
+          void runJob({ jobId: job.jobId }).catch(() => {
+            // 任务可能已经被其他轮次启动，忽略即可
+          });
+        }
       }
+      await new Promise((resolve) => window.setTimeout(resolve, 360));
       await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
+      await Promise.all(
+        importedDocumentIds.map((documentId) =>
+          queryClient.invalidateQueries({ queryKey: ["document-blocks", documentId] })
+        )
+      );
     }
 
     const documentsResult = await listDocuments(projectId);
     const importingDocuments = documentsResult.documents.filter((item) => importedDocumentIds.includes(item.documentId));
-    setImportProgress(buildImportProgress(importingDocuments));
+    const baseProgress = buildImportProgress(importingDocuments);
+    const detailProgress = await buildDetailedImportProgress(importedDocumentIds, baseProgress);
+    setImportProgress(detailProgress);
+    await queryClient.invalidateQueries({ queryKey: ["desktop-bootstrap"] });
+    await Promise.all(
+      importedDocumentIds.map((documentId) =>
+        queryClient.invalidateQueries({ queryKey: ["document-blocks", documentId] })
+      )
+    );
     const latestImportedDocument = documentsResult.documents.find((item) => importedDocumentIds.includes(item.documentId)) ?? null;
     if (latestImportedDocument) {
       setSelectedDocumentId(latestImportedDocument.documentId);
       setCurrentView("阅读器");
     }
+  }
+
+  async function buildDetailedImportProgress(
+    importedDocumentIds: string[],
+    baseProgress: ImportProgressState
+  ): Promise<ImportProgressState> {
+    const progresses = await Promise.all(
+      importedDocumentIds.map(async (documentId) => {
+        try {
+          const response = await invoke<{ progress?: DocumentParseProgress | null }>(
+            "get_document_parse_progress_command",
+            { payload: { documentId } }
+          );
+          return response.progress ?? null;
+        } catch {
+          return null;
+        }
+      })
+    );
+
+    const active = progresses.find((item) => item?.currentPage && item?.totalPages);
+    if (!active || !active.currentPage || !active.totalPages) {
+      return baseProgress;
+    }
+
+    const detailedStage = `正在解析第 ${active.currentPage}/${active.totalPages} 页`;
+    const detailedSummary = active.message?.trim()
+      ? `${active.message.trim()} · ${baseProgress.summary}`
+      : `${detailedStage} · ${baseProgress.summary}`;
+
+    return {
+      ...baseProgress,
+      currentStage: detailedStage,
+      summary: detailedSummary
+    };
   }
 
   async function submitProjectRename(project: Project) {
@@ -304,6 +414,49 @@ export function Dashboard({ bootstrap }: DashboardProps) {
     );
   }
 
+  function closeLibraryDrawerIfCompact() {
+    if (isCompactLayout) {
+      setIsLibraryDrawerOpen(false);
+    }
+  }
+
+  async function selectImportFilesFromSystem() {
+    if (importFilesMutation.isPending) {
+      return;
+    }
+
+    try {
+      const selected = await open({
+        multiple: true,
+        directory: false,
+        filters: [
+          {
+            name: "KnowFlow 支持的资料",
+            extensions: ["md", "txt", "pdf", "pptx", "docx"]
+          }
+        ]
+      });
+      if (!selected) {
+        return;
+      }
+
+      const nextPaths = Array.isArray(selected) ? selected : [selected];
+      setImportPaths(nextPaths);
+      if (!currentProject) {
+        setImportFeedback("请先创建项目再导入资料。");
+        return;
+      }
+
+      setImportFeedback(null);
+      importFilesMutation.mutate(nextPaths);
+      closeLibraryDrawerIfCompact();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法打开系统文件选择器";
+      setImportFeedback(`打开文件选择器失败：${message}`);
+      return;
+    }
+  }
+
   return (
     <main className="desktop-shell desktop-shell-windowless">
       <header className="topbar-shell">
@@ -318,6 +471,14 @@ export function Dashboard({ bootstrap }: DashboardProps) {
         >
           <SvgBrandMark />
         </div>
+        {!isGraphView ? (
+          <button
+            className={isLibraryDrawerOpen ? "topbar-library-toggle topbar-library-toggle-active" : "topbar-library-toggle"}
+            onClick={() => setIsLibraryDrawerOpen((current) => !current)}
+          >
+            资源库
+          </button>
+        ) : null}
         <nav className="topbar-menu">
           {["文件", "编辑", "查看", "工具", "帮助"].map((label) => (
             <button key={label} className="topbar-menu-button">
@@ -389,63 +550,34 @@ export function Dashboard({ bootstrap }: DashboardProps) {
         </div>
       </header>
 
-      <section className="desktop-layout desktop-layout-windowless">
-        <aside className="sidebar-icons sidebar-icons-windowless">
+      <section
+        className={
+          isGraphView
+            ? "desktop-layout desktop-layout-windowless desktop-layout-graph-mode"
+            : isCompactLayout
+              ? "desktop-layout desktop-layout-windowless desktop-layout-compact"
+              : "desktop-layout desktop-layout-windowless"
+        }
+      >
+        {!isGraphView ? (
+        <>
+        {isCompactLayout && isLibraryDrawerOpen ? (
           <button
-            className="icon-slot"
-            onClick={() => {
-              setCurrentView("项目");
-              searchInputRef.current?.focus();
-            }}
-            aria-label="搜索"
-            title="搜索"
-          >
-            <SvgSearchIcon />
-          </button>
-          <button
-            className="icon-slot"
-            onClick={() => createProjectMutation.mutate()}
-            disabled={createProjectMutation.isPending}
-            aria-label="新建项目"
-            title="新建项目"
-          >
-            <SvgPlusIcon />
-          </button>
-          <button className={currentView === "项目" ? "icon-slot icon-slot-active" : "icon-slot"} onClick={() => setCurrentView("项目")} aria-label="项目">
-            <SvgFolderIcon />
-          </button>
-          <button className={currentView === "阅读器" ? "icon-slot icon-slot-active" : "icon-slot"} onClick={() => setCurrentView("阅读器")} aria-label="阅读器">
-            <SvgDocumentIcon />
-          </button>
-          <button
-            className="icon-slot"
-            onClick={() => {
-              setCurrentView("阅读器");
-              if (currentDocument) {
-                setPaperAnalyzeTrigger((current) => current + 1);
-              }
-            }}
-            aria-label="全文论文解析"
-            title="全文论文解析"
-          >
-            <SvgPaperExplainIcon />
-          </button>
-          <button className={currentView === "卡片" ? "icon-slot icon-slot-active" : "icon-slot"} onClick={() => setCurrentView("卡片")} aria-label="卡片">
-            <SvgCardsIcon />
-          </button>
-          <button className={currentView === "图谱" ? "icon-slot icon-slot-active" : "icon-slot"} onClick={() => setCurrentView("图谱")} aria-label="图谱">
-            <SvgGraphIcon />
-          </button>
-          <button className={currentView === "Studio" ? "icon-slot icon-slot-active" : "icon-slot"} onClick={() => setCurrentView("Studio")} aria-label="Studio">
-            <SvgStudioIcon />
-          </button>
-          <div className="sidebar-icons-spacer" />
-          <button className={currentView === "Agent" ? "icon-slot icon-slot-active" : "icon-slot"} onClick={() => setCurrentView("Agent")} aria-label="Agent">
-            <SvgSparkIcon />
-          </button>
-        </aside>
-
-        <aside className="library-pane">
+            className="library-drawer-backdrop"
+            onClick={() => setIsLibraryDrawerOpen(false)}
+            aria-label="关闭资源库"
+          />
+        ) : null}
+        <aside
+          className={
+            isCompactLayout
+              ? isLibraryDrawerOpen
+                ? "library-pane library-pane-drawer library-pane-drawer-open"
+                : "library-pane library-pane-drawer"
+              : "library-pane"
+          }
+          aria-hidden={!showLibraryPane}
+        >
           <div className="library-pane-top">
             <div className="library-search-row">
               <input
@@ -470,13 +602,14 @@ export function Dashboard({ bootstrap }: DashboardProps) {
                     key={`${result.entityType}-${result.entityId}`}
                     className="tree-document-row"
                     onClick={() => {
-                      setCurrentView(result.entityType === "card" ? "卡片" : result.entityType === "block" ? "阅读器" : currentView);
+                      setCurrentView(result.entityType === "block" ? "阅读器" : currentView);
                       if (result.entityType === "block") {
                         const match = bootstrap.blocks.find((item) => item.blockId === result.entityId);
                         if (match) {
                           setSelectedDocumentId(match.documentId);
                         }
                       }
+                      closeLibraryDrawerIfCompact();
                     }}
                   >
                     <span className="tree-document-name">{result.title}</span>
@@ -489,8 +622,19 @@ export function Dashboard({ bootstrap }: DashboardProps) {
 
           <section className="library-block library-tree-block">
             <div className="library-block-header">
-              <span className="library-caption">资源库</span>
-              <span className="library-count">{bootstrap.projects.length}</span>
+              <div className="library-block-header-main">
+                <span className="library-caption">资源库</span>
+                <span className="library-count">{bootstrap.projects.length}</span>
+              </div>
+              <button
+                className="library-header-action"
+                onClick={() => createProjectMutation.mutate()}
+                disabled={createProjectMutation.isPending}
+                aria-label="新建项目"
+                title="新建项目"
+              >
+                <SvgPlusIcon />
+              </button>
             </div>
 
             <div className="tree-root-label">Projects</div>
@@ -546,6 +690,7 @@ export function Dashboard({ bootstrap }: DashboardProps) {
                         if (project.projectId !== currentProject?.projectId) {
                           openProjectMutation.mutate({ projectId: project.projectId });
                           setCollapsedProjectIds((current) => current.filter((item) => item !== project.projectId));
+                          closeLibraryDrawerIfCompact();
                           return;
                         }
                         toggleProjectCollapsed(project.projectId);
@@ -568,6 +713,7 @@ export function Dashboard({ bootstrap }: DashboardProps) {
                           onClick={() => {
                             setSelectedDocumentId(document.documentId);
                             setCurrentView("阅读器");
+                            closeLibraryDrawerIfCompact();
                           }}
                           onContextMenu={(event) => {
                             event.preventDefault();
@@ -602,25 +748,10 @@ export function Dashboard({ bootstrap }: DashboardProps) {
                     ? "import-dropzone import-dropzone-active"
                     : "import-dropzone"
               }
-              disabled={importFilesMutation.isPending || !currentProject}
-              onClick={async () => {
-                const selected = await open({
-                  multiple: true,
-                  directory: false,
-                  filters: [
-                    {
-                      name: "KnowledgeOS 支持的资料",
-                      extensions: ["md", "txt", "pdf", "pptx", "docx"]
-                    }
-                  ]
-                });
-                if (!selected) {
-                  return;
-                }
-                const nextPaths = Array.isArray(selected) ? selected : [selected];
-                setImportPaths(nextPaths);
-                setImportFeedback(null);
-                importFilesMutation.mutate(nextPaths);
+              type="button"
+              disabled={importFilesMutation.isPending}
+              onClick={() => {
+                void selectImportFilesFromSystem();
               }}
             >
               <div className="import-dropzone-title">
@@ -656,77 +787,185 @@ export function Dashboard({ bootstrap }: DashboardProps) {
             {importFeedback ? <p className="note-text">{importFeedback}</p> : null}
           </section>
         </aside>
+        </>
+        ) : null}
 
-        {currentView === "Agent" ? (
-          <AgentWorkspace currentProject={currentProject} />
-        ) : currentView === "卡片" ? (
-          <CardsWorkspace currentProject={currentProject} />
-        ) : currentView === "图谱" ? (
-          <GraphWorkspace
-            currentProject={currentProject}
-            onJumpToBlock={(blockId) => {
-              const match = bootstrap.blocks.find((item) => item.blockId === blockId);
-              if (!match) {
-                return;
-              }
-              setSelectedDocumentId(match.documentId);
-              setCurrentView("阅读器");
-            }}
-          />
-        ) : currentView === "Studio" ? (
-          <StudioWorkspace
-            currentProject={currentProject}
-            documents={projectDocuments}
-            onOpenKnowledgeGraph={(artifactId) => {
-              setSelectedKnowledgeGraphArtifactId(artifactId);
-              setCurrentView("知识网络");
-            }}
-            onOpenPracticeSet={(artifactId) => {
-              setSelectedPracticeSetArtifactId(artifactId);
-              setCurrentView("练习题");
-            }}
-            onOpenMindMap={(artifactId) => {
-              setSelectedMindMapArtifactId(artifactId);
-              setCurrentView("思维导图");
-            }}
-            onOpenPresentation={(artifactId) => {
-              setSelectedPresentationArtifactId(artifactId);
-              setCurrentView("演示文稿");
-            }}
-          />
-        ) : currentView === "知识网络" ? (
-          <KnowledgeGraphWorkspace
-            currentProject={currentProject}
-            selectedArtifactId={selectedKnowledgeGraphArtifactId}
-            onSelectArtifact={setSelectedKnowledgeGraphArtifactId}
-          />
-        ) : currentView === "练习题" ? (
-          <PracticeSetWorkspace
-            currentProject={currentProject}
-            selectedArtifactId={selectedPracticeSetArtifactId}
-            onSelectArtifact={setSelectedPracticeSetArtifactId}
-          />
-        ) : currentView === "思维导图" ? (
-          <MindMapWorkspace
-            currentProject={currentProject}
-            selectedArtifactId={selectedMindMapArtifactId}
-            onSelectArtifact={setSelectedMindMapArtifactId}
-          />
-        ) : currentView === "演示文稿" ? (
-          <PresentationWorkspace
-            currentProject={currentProject}
-            selectedArtifactId={selectedPresentationArtifactId}
-            onSelectArtifact={setSelectedPresentationArtifactId}
-          />
+        {currentView === "阅读器" ? (
+          currentDocument?.sourceType === "pdf" ? (
+            <PdfReaderWorkspace
+              currentProject={currentProject}
+              documents={projectDocuments}
+              currentDocument={currentDocument}
+              onSelectDocument={setSelectedDocumentId}
+              bootstrapBlocks={bootstrap.blocks}
+              onOpenGraphView={() => {
+                setCurrentView("图谱");
+              }}
+            />
+          ) : (
+            <ReaderWorkspace
+              currentProject={currentProject}
+              documents={projectDocuments}
+              currentDocument={currentDocument}
+              onSelectDocument={setSelectedDocumentId}
+              bootstrapBlocks={bootstrap.blocks}
+              paperAnalyzeTrigger={paperAnalyzeTrigger}
+              onFocusSearch={() => searchInputRef.current?.focus()}
+              onTriggerPaperAnalyze={() => {
+                setCurrentView("阅读器");
+                if (currentDocument) {
+                  setPaperAnalyzeTrigger((current) => current + 1);
+                }
+              }}
+              onOpenKnowledgeGraph={(artifactId) => {
+                setSelectedKnowledgeGraphArtifactId(artifactId);
+                setCurrentView("图谱");
+              }}
+              onOpenKnowledgeGraph3D={(artifactId) => {
+                setSelectedKnowledgeGraphArtifactId(artifactId);
+                setCurrentView("图谱");
+              }}
+              onOpenPracticeSet={(artifactId) => {
+                setSelectedPracticeSetArtifactId(artifactId);
+                setCurrentView("练习题");
+              }}
+              onOpenMindMap={(artifactId) => {
+                setSelectedMindMapArtifactId(artifactId);
+                setCurrentView("思维导图");
+              }}
+              onOpenPresentation={(artifactId) => {
+                setSelectedPresentationArtifactId(artifactId);
+                setCurrentView("演示文稿");
+              }}
+              onOpenGraphView={() => {
+                setCurrentView("图谱");
+              }}
+            />
+          )
         ) : (
-          <ReaderWorkspace
-            currentProject={currentProject}
-            documents={projectDocuments}
-            currentDocument={currentDocument}
-            onSelectDocument={setSelectedDocumentId}
-            bootstrapBlocks={bootstrap.blocks}
-            paperAnalyzeTrigger={paperAnalyzeTrigger}
-          />
+          <section className={isGraphView ? "workspace-shell-with-dock workspace-shell-with-dock-graph" : "workspace-shell-with-dock"}>
+            <div className="workspace-shell-main">
+              {currentView === "Agent" ? (
+                <AgentWorkspace currentProject={currentProject} />
+              ) : currentView === "图谱" ? (
+                <Graph3DWorkspace
+                  currentProject={currentProject}
+                  selectedArtifactId={selectedKnowledgeGraphArtifactId}
+                  onSelectArtifact={setSelectedKnowledgeGraphArtifactId}
+                  onJumpToBlock={(blockId) => {
+                    const match = bootstrap.blocks.find((item) => item.blockId === blockId);
+                    if (!match) {
+                      return;
+                    }
+                    setSelectedDocumentId(match.documentId);
+                    setCurrentView("阅读器");
+                  }}
+                />
+              ) : currentView === "知识网络" ? (
+                <KnowledgeGraphWorkspace
+                  currentProject={currentProject}
+                  selectedArtifactId={selectedKnowledgeGraphArtifactId}
+                  onSelectArtifact={setSelectedKnowledgeGraphArtifactId}
+                />
+              ) : currentView === "练习题" ? (
+                <PracticeSetWorkspace
+                  currentProject={currentProject}
+                  selectedArtifactId={selectedPracticeSetArtifactId}
+                  onSelectArtifact={setSelectedPracticeSetArtifactId}
+                />
+              ) : currentView === "思维导图" ? (
+                <MindMapWorkspace
+                  currentProject={currentProject}
+                  selectedArtifactId={selectedMindMapArtifactId}
+                  onSelectArtifact={setSelectedMindMapArtifactId}
+                />
+              ) : (
+                <PresentationWorkspace
+                  currentProject={currentProject}
+                  selectedArtifactId={selectedPresentationArtifactId}
+                  onSelectArtifact={setSelectedPresentationArtifactId}
+                />
+              )}
+            </div>
+
+            {secondaryPanelKind === "studio" && !isGraphView ? (
+              <div className="workspace-secondary-panel">
+                <StudioDockPanel
+                  currentProject={currentProject}
+                  documents={projectDocuments}
+                  onOpenKnowledgeGraph={(artifactId) => {
+                    setSelectedKnowledgeGraphArtifactId(artifactId);
+                    setCurrentView("图谱");
+                  }}
+                  onOpenKnowledgeGraph3D={(artifactId) => {
+                    setSelectedKnowledgeGraphArtifactId(artifactId);
+                    setCurrentView("图谱");
+                  }}
+                  onOpenPracticeSet={(artifactId) => {
+                    setSelectedPracticeSetArtifactId(artifactId);
+                    setCurrentView("练习题");
+                  }}
+                  onOpenMindMap={(artifactId) => {
+                    setSelectedMindMapArtifactId(artifactId);
+                    setCurrentView("思维导图");
+                  }}
+                  onOpenPresentation={(artifactId) => {
+                    setSelectedPresentationArtifactId(artifactId);
+                    setCurrentView("演示文稿");
+                  }}
+                />
+              </div>
+            ) : null}
+
+            <aside className="workspace-right-rail">
+              <button
+                className="utility-rail-button"
+                onClick={() => searchInputRef.current?.focus()}
+                aria-label="搜索"
+                title="搜索"
+              >
+                <SvgSearchIcon />
+              </button>
+              <button
+                className="utility-rail-button"
+                onClick={() => setCurrentView("阅读器")}
+                aria-label="阅读器"
+                title="阅读器"
+              >
+                <SvgDocumentIcon />
+              </button>
+              <button
+                className="utility-rail-button"
+                onClick={() => {
+                  setCurrentView("阅读器");
+                  if (currentDocument) {
+                    setPaperAnalyzeTrigger((current) => current + 1);
+                  }
+                }}
+                aria-label="学习解析模式"
+                title="学习解析模式"
+              >
+                <SvgPaperExplainIcon />
+              </button>
+              <button
+                className={currentView === "图谱" ? "utility-rail-button utility-rail-button-active" : "utility-rail-button"}
+                onClick={() => setCurrentView("图谱")}
+                aria-label="图谱"
+                title="图谱"
+              >
+                <SvgGraphIcon />
+              </button>
+              <div className="workspace-right-rail-spacer" />
+              <button
+                className={secondaryPanelKind === "studio" ? "utility-rail-button utility-rail-button-active" : "utility-rail-button"}
+                onClick={() => setSecondaryPanelKind((current) => current === "studio" ? null : "studio")}
+                aria-label="Studio"
+                title="Studio"
+              >
+                <SvgStudioIcon />
+              </button>
+            </aside>
+          </section>
         )}
       </section>
       {projectContextMenu ? (

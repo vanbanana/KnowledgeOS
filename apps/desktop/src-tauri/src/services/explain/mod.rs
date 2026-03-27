@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::ai::model_adapter::{ModelAdapter, ModelRequest};
 use crate::services::block::get_block;
 
-pub const EXPLAIN_PROMPT_VERSION: &str = "explain.v1";
+pub const EXPLAIN_PROMPT_VERSION: &str = "explain.v2";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +56,8 @@ pub struct ExplainResult {
     pub assumptions_or_limits: Option<String>,
     #[serde(default)]
     pub plain_explanation: Option<String>,
+    #[serde(default)]
+    pub extension: Option<String>,
     #[serde(default)]
     pub language: Option<String>,
     #[serde(default)]
@@ -147,12 +149,7 @@ fn explain_block_with_options(
 
     let template =
         get_explain_template(connection, mode)?.ok_or_else(|| "Explain 模板不存在".to_string())?;
-    let cache_key = build_cache_key(
-        block_id,
-        mode,
-        model_name,
-        EXPLAIN_PROMPT_VERSION,
-    );
+    let cache_key = build_cache_key(block_id, mode, model_name, EXPLAIN_PROMPT_VERSION);
     if !force_refresh {
         if let Some(cached) = get_block_explanation_by_cache_key(connection, &cache_key)? {
             return Ok(cached);
@@ -255,21 +252,51 @@ fn normalize_explain_object(mode: &str, object: &mut Map<String, Value>) {
     if !object.contains_key("summary") {
         let fallback = read_string_field(
             object,
-            &["summary", "what_is_this_block_about", "当前块主题", "说明当前块到底在讲什么"],
+            &[
+                "summary",
+                "what_is_this_block_about",
+                "当前块主题",
+                "说明当前块到底在讲什么",
+            ],
         )
-        .or_else(|| read_nested_string_field(parsed_content.as_ref(), &["what_is_this_block_about", "当前块主题", "说明当前块到底在讲什么"]))
+        .or_else(|| {
+            read_nested_string_field(
+                parsed_content.as_ref(),
+                &[
+                    "what_is_this_block_about",
+                    "当前块主题",
+                    "说明当前块到底在讲什么",
+                ],
+            )
+        })
         .unwrap_or_else(|| "当前块未提供充分信息".to_string());
         object.insert("summary".to_string(), Value::String(fallback));
     }
     if !object.contains_key("roleInDocument") {
         let fallback = read_string_field(object, &["roleInPaper", "role_in_paper"])
-            .or_else(|| read_nested_string_field(parsed_content.as_ref(), &["role_in_paper", "在论文中的作用", "role_in_paper", "role_in_document", "在论文整体中的作用"]))
+            .or_else(|| {
+                read_nested_string_field(
+                    parsed_content.as_ref(),
+                    &[
+                        "role_in_paper",
+                        "在论文中的作用",
+                        "role_in_paper",
+                        "role_in_document",
+                        "在论文整体中的作用",
+                    ],
+                )
+            })
             .unwrap_or_else(|| "当前块未提供充分信息".to_string());
         object.insert("roleInDocument".to_string(), Value::String(fallback));
     }
     if !object.contains_key("roleInPaper") {
         let fallback = read_string_field(object, &["roleInDocument", "role_in_document"])
-            .or_else(|| read_nested_string_field(parsed_content.as_ref(), &["role_in_paper", "在论文中的作用", "在论文整体中的作用"]))
+            .or_else(|| {
+                read_nested_string_field(
+                    parsed_content.as_ref(),
+                    &["role_in_paper", "在论文中的作用", "在论文整体中的作用"],
+                )
+            })
             .unwrap_or_else(|| "当前块未提供充分信息".to_string());
         object.insert("roleInPaper".to_string(), Value::String(fallback));
     }
@@ -290,7 +317,8 @@ fn normalize_explain_object(mode: &str, object: &mut Map<String, Value>) {
     if !matches!(object.get("keyPoints"), Some(Value::Array(_))) {
         object.insert(
             "keyPoints".to_string(),
-            read_nested_string_array(parsed_content.as_ref(), &["key_points", "最重要要点"]).unwrap_or(Value::Array(Vec::new())),
+            read_nested_string_array(parsed_content.as_ref(), &["key_points", "最重要要点"])
+                .unwrap_or(Value::Array(Vec::new())),
         );
     }
     if !matches!(object.get("terms"), Some(Value::Array(_))) {
@@ -305,29 +333,61 @@ fn normalize_explain_object(mode: &str, object: &mut Map<String, Value>) {
         "methodOrLogic",
         "当前块未提供充分信息",
         parsed_content.as_ref(),
-        &["methodOrLogic", "核心逻辑", "核心逻辑或证据", "core_logic_if_method", "core_logic_if_method_or_experiment"],
+        &[
+            "methodOrLogic",
+            "核心逻辑",
+            "核心逻辑或证据",
+            "core_logic_if_method",
+            "core_logic_if_method_or_experiment",
+        ],
     );
     ensure_string_field_from_sources(
         object,
         "evidence",
         "当前块未提供充分信息",
         parsed_content.as_ref(),
-        &["evidence", "证据或结果", "证据或现象", "evidence_if_applicable", "evidence_if_results_or_observations"],
+        &[
+            "evidence",
+            "证据或结果",
+            "证据或现象",
+            "evidence_if_applicable",
+            "evidence_if_results_or_observations",
+        ],
     );
     ensure_string_field_from_sources(
         object,
         "assumptionsOrLimits",
         "当前块未体现",
         parsed_content.as_ref(),
-        &["assumptionsOrLimits", "假设、限制或边界条件", "假设、限制或边界条件", "assumptions_or_limits", "assumptions_limitations_boundaries"],
+        &[
+            "assumptionsOrLimits",
+            "假设、限制或边界条件",
+            "假设、限制或边界条件",
+            "assumptions_or_limits",
+            "assumptions_limitations_boundaries",
+        ],
     );
-    let default_plain = read_string_field(object, &["summary"]).unwrap_or_else(|| "当前块未提供充分信息".to_string());
+    let default_plain = read_string_field(object, &["summary"])
+        .unwrap_or_else(|| "当前块未提供充分信息".to_string());
     ensure_string_field_from_sources(
         object,
         "plainExplanation",
         &default_plain,
         parsed_content.as_ref(),
         &["plainExplanation", "直白解释", "plain_language_explanation"],
+    );
+    ensure_string_field_from_sources(
+        object,
+        "extension",
+        "可以继续追问相关概念、应用场景和延伸知识。",
+        parsed_content.as_ref(),
+        &[
+            "extension",
+            "拓展",
+            "延伸理解",
+            "further_exploration",
+            "related_extension",
+        ],
     );
     ensure_string_field(object, "language", "zh");
     ensure_string_field(object, "confidence", "medium");
@@ -385,22 +445,20 @@ fn ensure_string_field_from_sources(
     let nested_value = read_nested_string_field(nested, extra_keys);
     object.insert(
         key.to_string(),
-        Value::String(direct.or(nested_value).unwrap_or_else(|| default_value.to_string())),
+        Value::String(
+            direct
+                .or(nested_value)
+                .unwrap_or_else(|| default_value.to_string()),
+        ),
     );
 }
 
-fn read_nested_string_field(
-    nested: Option<&Map<String, Value>>,
-    keys: &[&str],
-) -> Option<String> {
+fn read_nested_string_field(nested: Option<&Map<String, Value>>, keys: &[&str]) -> Option<String> {
     let object = nested?;
     read_string_field(object, keys)
 }
 
-fn read_nested_string_array(
-    nested: Option<&Map<String, Value>>,
-    keys: &[&str],
-) -> Option<Value> {
+fn read_nested_string_array(nested: Option<&Map<String, Value>>, keys: &[&str]) -> Option<Value> {
     let object = nested?;
     for key in keys {
         if let Some(Value::Array(items)) = object.get(*key) {
@@ -410,7 +468,15 @@ fn read_nested_string_array(
             let items = text
                 .lines()
                 .map(str::trim)
-                .map(|line| line.trim_start_matches(|ch: char| ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '•' || ch.is_whitespace()))
+                .map(|line| {
+                    line.trim_start_matches(|ch: char| {
+                        ch.is_ascii_digit()
+                            || ch == '.'
+                            || ch == '-'
+                            || ch == '•'
+                            || ch.is_whitespace()
+                    })
+                })
                 .filter(|line| !line.is_empty())
                 .map(|line| Value::String(line.to_string()))
                 .collect::<Vec<_>>();
@@ -453,12 +519,23 @@ fn read_nested_terms(nested: Option<&Map<String, Value>>) -> Option<Value> {
             let items = text
                 .lines()
                 .filter_map(|line| {
-                    let trimmed = line.trim().trim_start_matches(|ch: char| ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '•' || ch.is_whitespace());
-                    let (term, explanation) = trimmed.split_once('：').or_else(|| trimmed.split_once(':'))?;
+                    let trimmed = line.trim().trim_start_matches(|ch: char| {
+                        ch.is_ascii_digit()
+                            || ch == '.'
+                            || ch == '-'
+                            || ch == '•'
+                            || ch.is_whitespace()
+                    });
+                    let (term, explanation) = trimmed
+                        .split_once('：')
+                        .or_else(|| trimmed.split_once(':'))?;
                     Some(Value::Object(
                         [
                             ("term".to_string(), Value::String(term.trim().to_string())),
-                            ("explanation".to_string(), Value::String(explanation.trim().to_string())),
+                            (
+                                "explanation".to_string(),
+                                Value::String(explanation.trim().to_string()),
+                            ),
                         ]
                         .into_iter()
                         .collect(),
@@ -576,6 +653,7 @@ pub fn seed_default_explain_templates(connection: &Connection) -> Result<(), Str
             "evidence": { "type": "string" },
             "assumptionsOrLimits": { "type": "string" },
             "plainExplanation": { "type": "string" },
+            "extension": { "type": "string" },
             "language": { "type": "string" },
             "confidence": { "type": "string" },
             "mode": { "type": "string" },
@@ -632,7 +710,7 @@ pub fn list_explain_templates(
 
 fn build_user_prompt_template(mode: &str) -> String {
     if mode == "paper" {
-        return "请基于当前论文块输出论文解析 JSON。\n模式：paper\nblock_id={{block_id}}\nheading_path={{heading_path}}\ncontent_md:\n{{content_md}}\n只输出 JSON。".to_string();
+        return "请基于当前文本块输出学习解析模式 JSON。\n模式：paper\nblock_id={{block_id}}\nheading_path={{heading_path}}\ncontent_md:\n{{content_md}}\n只输出 JSON。".to_string();
     }
     format!(
         "请基于以下块内容生成结构化 Explain JSON。\n模式：{mode}\nblock_id={{block_id}}\nheading_path={{heading_path}}\ncontent_md:\n{{content_md}}\n只输出 JSON。"
@@ -812,8 +890,8 @@ mod tests {
 
     use super::{
         EXPLAIN_PROMPT_VERSION, ExplainKeyConcept, ExplainRelatedCandidate, ExplainResult,
-        explain_block, list_explain_templates,
-        regenerate_block_explanation, seed_default_explain_templates,
+        explain_block, list_explain_templates, regenerate_block_explanation,
+        seed_default_explain_templates,
     };
     use crate::ai::model_adapter::{ModelAdapter, ModelRequest, ModelResponse};
     use crate::db::initialize_database;

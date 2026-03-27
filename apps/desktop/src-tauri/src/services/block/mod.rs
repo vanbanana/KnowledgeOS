@@ -3,6 +3,11 @@ use rusqlite::{Connection, params};
 use serde::Serialize;
 use uuid::Uuid;
 
+const BLOCK_TYPE_SECTION: &str = "section";
+const BLOCK_TYPE_PARAGRAPH: &str = "paragraph";
+const BLOCK_TYPE_NOTE: &str = "note";
+const BLOCK_TYPE_EXAMPLE: &str = "example";
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BlockRecord {
@@ -107,43 +112,44 @@ pub fn delete_block(connection: &Connection, block_id: &str) -> Result<(), Strin
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "Block 不存在".to_string())?;
     let now = Utc::now().to_rfc3339();
-    connection.execute(
-        "DELETE FROM block_explanations WHERE block_id = ?1",
-        [block_id],
-    )
-    .map_err(|error| error.to_string())?;
-    connection.execute(
-        "DELETE FROM cards WHERE source_block_id = ?1",
-        [block_id],
-    )
-    .map_err(|error| error.to_string())?;
-    connection.execute(
-        "DELETE FROM search_fts WHERE entity_type = 'block' AND entity_id = ?1",
-        [block_id],
-    )
-    .map_err(|error| error.to_string())?;
-    connection.execute(
-        "DELETE FROM graph_relations
+    connection
+        .execute(
+            "DELETE FROM block_explanations WHERE block_id = ?1",
+            [block_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute("DELETE FROM cards WHERE source_block_id = ?1", [block_id])
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "DELETE FROM search_fts WHERE entity_type = 'block' AND entity_id = ?1",
+            [block_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "DELETE FROM graph_relations
          WHERE source_ref = ?1
             OR from_node_id IN (SELECT node_id FROM graph_nodes WHERE source_ref = ?1)
             OR to_node_id IN (SELECT node_id FROM graph_nodes WHERE source_ref = ?1)",
-        [block_id],
-    )
-    .map_err(|error| error.to_string())?;
-    connection.execute(
-        "DELETE FROM graph_nodes WHERE source_ref = ?1",
-        [block_id],
-    )
-    .map_err(|error| error.to_string())?;
-    connection.execute("DELETE FROM blocks WHERE block_id = ?1", [block_id])
+            [block_id],
+        )
         .map_err(|error| error.to_string())?;
-    connection.execute(
-        "UPDATE blocks
+    connection
+        .execute("DELETE FROM graph_nodes WHERE source_ref = ?1", [block_id])
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute("DELETE FROM blocks WHERE block_id = ?1", [block_id])
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "UPDATE blocks
          SET order_index = order_index - 1, updated_at = ?1
          WHERE document_id = ?2 AND order_index > ?3",
-        params![now, block.document_id, block.order_index],
-    )
-    .map_err(|error| error.to_string())?;
+            params![now, block.document_id, block.order_index],
+        )
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -158,7 +164,8 @@ pub fn insert_note_block(
         resolve_insert_position(connection, document_id, before_block_id)?;
     let now = Utc::now().to_rfc3339();
     let block_id = format!("note-{}", Uuid::new_v4());
-    let heading_path_json = serde_json::to_string(&Vec::<String>::new()).unwrap_or("[]".to_string());
+    let heading_path_json =
+        serde_json::to_string(&Vec::<String>::new()).unwrap_or("[]".to_string());
     let token_count = estimate_token_count(content_md);
 
     connection
@@ -249,12 +256,13 @@ fn map_block_row(row: &rusqlite::Row<'_>) -> Result<BlockRecord, rusqlite::Error
     let updated_at = row
         .get::<_, Option<String>>(15)?
         .unwrap_or_else(|| created_at.clone());
+    let raw_block_type: String = row.get(3)?;
 
     Ok(BlockRecord {
         block_id: row.get(0)?,
         project_id: row.get(1)?,
         document_id: row.get(2)?,
-        block_type: row.get(3)?,
+        block_type: normalize_block_type(&raw_block_type),
         title: row.get(4)?,
         heading_path,
         depth: row.get(6)?,
@@ -268,4 +276,21 @@ fn map_block_row(row: &rusqlite::Row<'_>) -> Result<BlockRecord, rusqlite::Error
         created_at,
         updated_at,
     })
+}
+
+pub fn normalize_block_type(value: &str) -> String {
+    let normalized = value.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        BLOCK_TYPE_SECTION | "heading" | "header" | "title" | "chapter" | "h1" | "h2" | "h3"
+        | "章节" | "标题" | "小节" => BLOCK_TYPE_SECTION.to_string(),
+        BLOCK_TYPE_PARAGRAPH | "text" | "content" | "body" | "chunk" | "paragraph_block"
+        | "正文" | "段落" | "文本" => BLOCK_TYPE_PARAGRAPH.to_string(),
+        BLOCK_TYPE_NOTE | "annotation" | "comment" | "memo" | "笔记" | "注释" => {
+            BLOCK_TYPE_NOTE.to_string()
+        }
+        BLOCK_TYPE_EXAMPLE | "case" | "sample" | "实例" | "示例" => {
+            BLOCK_TYPE_EXAMPLE.to_string()
+        }
+        _ => BLOCK_TYPE_PARAGRAPH.to_string(),
+    }
 }

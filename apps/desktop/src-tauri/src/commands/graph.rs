@@ -3,10 +3,14 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::services::graph::query::{SubgraphFilters, SubgraphRecord, get_subgraph};
+use crate::services::graph::rag::{
+    GraphRagEvidenceRecord, GraphRagQueryRecord, GraphRagTurn, complete_graph_rag_query,
+    gather_graph_rag_context,
+};
 use crate::services::graph::suggest::suggest_relations_for_card;
 use crate::services::graph::{
     GraphRelationRecord, RelationSuggestionRecord, UpsertRelationInput, confirm_relation,
-    remove_relation, upsert_relation,
+    ensure_graph_seeded_from_studio_preview, remove_relation, upsert_relation,
 };
 use crate::state::AppState;
 
@@ -45,6 +49,23 @@ pub struct RelationIdPayload {
     pub relation_id: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphRagHistoryItemPayload {
+    pub role: String,
+    pub content: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphRagQueryPayload {
+    pub project_id: String,
+    pub query: String,
+    pub focus_node_id: Option<String>,
+    #[serde(default)]
+    pub history: Vec<GraphRagHistoryItemPayload>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GetSubgraphResponse {
@@ -69,12 +90,24 @@ pub struct RemoveRelationResponse {
     pub removed: bool,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphRagQueryResponse {
+    pub answer: String,
+    pub model: String,
+    pub provider: String,
+    pub related_nodes: Vec<crate::services::graph::GraphNodeRecord>,
+    pub related_relations: Vec<GraphRelationRecord>,
+    pub evidence: Vec<GraphRagEvidenceRecord>,
+}
+
 #[tauri::command]
 pub fn get_subgraph_command(
     payload: GetSubgraphPayload,
     state: tauri::State<'_, Arc<Mutex<AppState>>>,
 ) -> Result<GetSubgraphResponse, String> {
     let app_state = state.lock().map_err(|error| error.to_string())?;
+    ensure_graph_seeded_from_studio_preview(&app_state.db, &payload.project_id)?;
     let subgraph = get_subgraph(
         &app_state.db,
         &SubgraphFilters {
@@ -137,4 +170,42 @@ pub fn remove_relation_command(
     let app_state = state.lock().map_err(|error| error.to_string())?;
     remove_relation(&app_state.db, &payload.relation_id)?;
     Ok(RemoveRelationResponse { removed: true })
+}
+
+#[tauri::command]
+pub fn graph_rag_query_command(
+    payload: GraphRagQueryPayload,
+    state: tauri::State<'_, Arc<Mutex<AppState>>>,
+) -> Result<GraphRagQueryResponse, String> {
+    let (context, model_settings) = {
+        let app_state = state.lock().map_err(|error| error.to_string())?;
+        ensure_graph_seeded_from_studio_preview(&app_state.db, &payload.project_id)?;
+        let history = payload
+            .history
+            .iter()
+            .filter(|item| !item.content.trim().is_empty())
+            .map(|item| GraphRagTurn {
+                role: item.role.clone(),
+                content: item.content.clone(),
+            })
+            .collect::<Vec<_>>();
+        let context = gather_graph_rag_context(
+            &app_state.db,
+            &payload.project_id,
+            &payload.query,
+            payload.focus_node_id.as_deref(),
+            &history,
+        )?;
+        (context, app_state.config.model_settings.clone())
+    };
+
+    let result: GraphRagQueryRecord = complete_graph_rag_query(&model_settings, context)?;
+    Ok(GraphRagQueryResponse {
+        answer: result.answer,
+        model: result.model,
+        provider: result.provider,
+        related_nodes: result.related_nodes,
+        related_relations: result.related_relations,
+        evidence: result.evidence,
+    })
 }

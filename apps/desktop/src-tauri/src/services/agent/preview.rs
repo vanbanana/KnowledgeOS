@@ -1,8 +1,8 @@
 use serde_json::Value;
 
 use crate::services::agent::{
-    AgentPreview, AgentPreviewItem, AgentTaskRecord, append_task_log, get_agent_task, parse_agent_plan,
-    save_agent_preview,
+    AgentPreview, AgentPreviewItem, AgentTaskRecord, append_task_log, get_agent_task,
+    parse_agent_plan, save_agent_preview,
 };
 use crate::services::block::get_block;
 use crate::services::card::get_card;
@@ -14,7 +14,8 @@ pub fn generate_preview(
     app_state: &AppState,
     task_id: &str,
 ) -> Result<(AgentTaskRecord, AgentPreview), String> {
-    let task = get_agent_task(&app_state.db, task_id)?.ok_or_else(|| "Agent 任务不存在".to_string())?;
+    let task =
+        get_agent_task(&app_state.db, task_id)?.ok_or_else(|| "Agent 任务不存在".to_string())?;
     let plan = parse_agent_plan(&task)?;
     let mut items = Vec::new();
     let mut impact_summary = Vec::new();
@@ -31,7 +32,11 @@ pub fn generate_preview(
     }
 
     let preview = AgentPreview {
-        summary: format!("该计划共 {} 步，将影响 {} 个对象。", plan.steps.len(), items.len()),
+        summary: format!(
+            "该计划共 {} 步，将影响 {} 个对象。",
+            plan.steps.len(),
+            items.len()
+        ),
         impact_summary,
         risks,
         items,
@@ -57,7 +62,8 @@ fn build_preview_item(
         }
         "read_document" => {
             if let Some(document_id) = args.get("documentId").and_then(Value::as_str)
-                && let Some(document) = get_document(&app_state.db, document_id).map_err(|error| error.to_string())?
+                && let Some(document) =
+                    get_document(&app_state.db, document_id).map_err(|error| error.to_string())?
             {
                 label = document.title.unwrap_or(document.document_id.clone());
                 target_ref = Some(format!("document:{document_id}"));
@@ -66,7 +72,8 @@ fn build_preview_item(
         }
         "rename_file" | "move_file" | "delete_file" => {
             if let Some(document_id) = args.get("documentId").and_then(Value::as_str)
-                && let Some(document) = get_document(&app_state.db, document_id).map_err(|error| error.to_string())?
+                && let Some(document) =
+                    get_document(&app_state.db, document_id).map_err(|error| error.to_string())?
             {
                 label = document.title.unwrap_or(document.document_id.clone());
                 target_ref = Some(format!("document:{document_id}"));
@@ -74,19 +81,25 @@ fn build_preview_item(
                 after_summary = if step.tool_name == "delete_file" {
                     Some("将删除该文件及其索引记录".to_string())
                 } else {
-                    args
-                        .get("newName")
+                    args.get("newName")
                         .and_then(Value::as_str)
                         .map(|value| format!("将改为 {value}"))
-                        .or_else(|| args.get("targetPath").and_then(Value::as_str).map(|value| value.to_string()))
+                        .or_else(|| {
+                            args.get("targetPath")
+                                .and_then(Value::as_str)
+                                .map(|value| value.to_string())
+                        })
                 };
             }
         }
         "update_markdown" => {
             if let Some(block_id) = args.get("blockId").and_then(Value::as_str)
-                && let Some(block) = get_block(&app_state.db, block_id).map_err(|error| error.to_string())?
+                && let Some(block) =
+                    get_block(&app_state.db, block_id).map_err(|error| error.to_string())?
             {
-                label = block.title.unwrap_or_else(|| format!("块 {}", block.order_index + 1));
+                label = block
+                    .title
+                    .unwrap_or_else(|| format!("块 {}", block.order_index + 1));
                 target_ref = Some(format!("block:{block_id}"));
                 before_summary = Some(truncate_text(&block.content_md));
                 after_summary = args
@@ -103,7 +116,9 @@ fn build_preview_item(
                     .get("sourceDocumentId")
                     .and_then(Value::as_str)
                     .map(|value| format!("document:{value}"));
-                after_summary = if args.get("contentMode").and_then(Value::as_str) == Some("generate") {
+                after_summary = if args.get("contentMode").and_then(Value::as_str)
+                    == Some("generate")
+                {
                     args.get("instruction")
                         .and_then(Value::as_str)
                         .map(|value| format!("模型将按该指令生成内容：{}", truncate_text(value)))
@@ -116,14 +131,26 @@ fn build_preview_item(
             }
         }
         "merge_cards" => {
-            let source_card_id = args.get("sourceCardId").and_then(Value::as_str).unwrap_or("");
-            let target_card_id = args.get("targetCardId").and_then(Value::as_str).unwrap_or("");
+            let source_card_id = args
+                .get("sourceCardId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let target_card_id = args
+                .get("targetCardId")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let source_card = get_card(&app_state.db, source_card_id)?;
             let target_card = get_card(&app_state.db, target_card_id)?;
             label = format!(
                 "{} -> {}",
-                source_card.as_ref().map(|item| item.title.as_str()).unwrap_or("源卡片"),
-                target_card.as_ref().map(|item| item.title.as_str()).unwrap_or("目标卡片")
+                source_card
+                    .as_ref()
+                    .map(|item| item.title.as_str())
+                    .unwrap_or("源卡片"),
+                target_card
+                    .as_ref()
+                    .map(|item| item.title.as_str())
+                    .unwrap_or("目标卡片")
             );
             target_ref = Some(format!("card:{target_card_id}"));
         }
@@ -134,7 +161,12 @@ fn build_preview_item(
                 label = card.title;
                 target_ref = Some(format!("card:{card_id}"));
                 before_summary = Some(card.tags_json);
-                after_summary = Some(args.get("tags").cloned().unwrap_or(Value::Array(vec![])).to_string());
+                after_summary = Some(
+                    args.get("tags")
+                        .cloned()
+                        .unwrap_or(Value::Array(vec![]))
+                        .to_string(),
+                );
             }
         }
         "create_relation" => {
@@ -144,15 +176,20 @@ fn build_preview_item(
             let to = get_node(&app_state.db, to_node_id)?;
             label = format!(
                 "{} -> {}",
-                from.as_ref().map(|item| item.label.as_str()).unwrap_or("起点"),
-                to.as_ref().map(|item| item.label.as_str()).unwrap_or("终点")
+                from.as_ref()
+                    .map(|item| item.label.as_str())
+                    .unwrap_or("起点"),
+                to.as_ref()
+                    .map(|item| item.label.as_str())
+                    .unwrap_or("终点")
             );
         }
         "remove_relation" => {
             if let Some(relation_id) = args.get("relationId").and_then(Value::as_str) {
-                let relation = list_relations(&app_state.db, &get_project_id_from_task(app_state, step)?)?
-                    .into_iter()
-                    .find(|item| item.relation_id == relation_id);
+                let relation =
+                    list_relations(&app_state.db, &get_project_id_from_task(app_state, step)?)?
+                        .into_iter()
+                        .find(|item| item.relation_id == relation_id);
                 if let Some(relation) = relation {
                     label = format!("{} ({})", relation.relation_type, relation.relation_id);
                     target_ref = Some(format!("relation:{relation_id}"));
@@ -190,7 +227,9 @@ fn get_project_id_from_task(
         .or_else(|| {
             app_state
                 .db
-                .query_row("SELECT project_id FROM projects LIMIT 1", [], |row| row.get(0))
+                .query_row("SELECT project_id FROM projects LIMIT 1", [], |row| {
+                    row.get(0)
+                })
                 .ok()
         })
         .ok_or_else(|| "无法解析项目上下文".to_string())

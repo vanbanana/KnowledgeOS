@@ -31,8 +31,12 @@ pub fn rollback_task(
 }
 
 fn restore_snapshot(connection: &Connection, snapshot: &SnapshotRecord) -> Result<(), String> {
-    let payload: Value = serde_json::from_str(&snapshot.snapshot_json).map_err(|error| error.to_string())?;
-    let kind = payload.get("kind").and_then(Value::as_str).unwrap_or("record");
+    let payload: Value =
+        serde_json::from_str(&snapshot.snapshot_json).map_err(|error| error.to_string())?;
+    let kind = payload
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("record");
     if kind == "file" {
         restore_file_snapshot(snapshot, &payload)?;
         return Ok(());
@@ -74,10 +78,17 @@ fn restore_file_snapshot(snapshot: &SnapshotRecord, payload: &Value) -> Result<(
     Ok(())
 }
 
-fn restore_document(connection: &Connection, snapshot: &SnapshotRecord, record: &Value) -> Result<(), String> {
+fn restore_document(
+    connection: &Connection,
+    snapshot: &SnapshotRecord,
+    record: &Value,
+) -> Result<(), String> {
     if record.is_null() {
         connection
-            .execute("DELETE FROM documents WHERE document_id = ?1", [snapshot.entity_id.as_str()])
+            .execute(
+                "DELETE FROM documents WHERE document_id = ?1",
+                [snapshot.entity_id.as_str()],
+            )
             .map_err(|error| error.to_string())?;
         return Ok(());
     }
@@ -106,10 +117,17 @@ fn restore_document(connection: &Connection, snapshot: &SnapshotRecord, record: 
     Ok(())
 }
 
-fn restore_block(connection: &Connection, snapshot: &SnapshotRecord, record: &Value) -> Result<(), String> {
+fn restore_block(
+    connection: &Connection,
+    snapshot: &SnapshotRecord,
+    record: &Value,
+) -> Result<(), String> {
     if record.is_null() {
         connection
-            .execute("DELETE FROM blocks WHERE block_id = ?1", [snapshot.entity_id.as_str()])
+            .execute(
+                "DELETE FROM blocks WHERE block_id = ?1",
+                [snapshot.entity_id.as_str()],
+            )
             .map_err(|error| error.to_string())?;
         return Ok(());
     }
@@ -142,10 +160,17 @@ fn restore_block(connection: &Connection, snapshot: &SnapshotRecord, record: &Va
     Ok(())
 }
 
-fn restore_card(connection: &Connection, snapshot: &SnapshotRecord, record: &Value) -> Result<(), String> {
+fn restore_card(
+    connection: &Connection,
+    snapshot: &SnapshotRecord,
+    record: &Value,
+) -> Result<(), String> {
     if record.is_null() {
         connection
-            .execute("DELETE FROM cards WHERE card_id = ?1", [snapshot.entity_id.as_str()])
+            .execute(
+                "DELETE FROM cards WHERE card_id = ?1",
+                [snapshot.entity_id.as_str()],
+            )
             .map_err(|error| error.to_string())?;
         return Ok(());
     }
@@ -172,10 +197,17 @@ fn restore_card(connection: &Connection, snapshot: &SnapshotRecord, record: &Val
     Ok(())
 }
 
-fn restore_relation(connection: &Connection, snapshot: &SnapshotRecord, record: &Value) -> Result<(), String> {
+fn restore_relation(
+    connection: &Connection,
+    snapshot: &SnapshotRecord,
+    record: &Value,
+) -> Result<(), String> {
     if record.is_null() {
         connection
-            .execute("DELETE FROM graph_relations WHERE relation_id = ?1", [snapshot.entity_id.as_str()])
+            .execute(
+                "DELETE FROM graph_relations WHERE relation_id = ?1",
+                [snapshot.entity_id.as_str()],
+            )
             .map_err(|error| error.to_string())?;
         return Ok(());
     }
@@ -194,7 +226,15 @@ fn restore_relation(connection: &Connection, snapshot: &SnapshotRecord, record: 
                 record.get("confidence").and_then(Value::as_f64),
                 record.get("originType").and_then(Value::as_str),
                 record.get("sourceRef").and_then(Value::as_str),
-                if record.get("confirmedByUser").and_then(Value::as_bool).unwrap_or(false) { 1 } else { 0 },
+                if record
+                    .get("confirmedByUser")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    1
+                } else {
+                    0
+                },
                 record.get("createdAt").and_then(Value::as_str)
             ],
         )

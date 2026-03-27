@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 use crate::ai::model_adapter::build_model_adapter;
 use crate::db::initialize_database;
 use crate::services::studio::{
-    CreateStudioArtifactInput, StudioArtifactRecord, create_studio_artifact, generate_studio_artifact,
-    get_studio_artifact, list_studio_artifacts, mark_studio_artifact_failed,
+    CreateStudioArtifactInput, StudioArtifactRecord, create_studio_artifact,
+    generate_studio_artifact, get_studio_artifact, list_studio_artifacts,
+    mark_studio_artifact_failed,
 };
 use crate::state::AppState;
 
@@ -53,8 +54,7 @@ pub async fn create_studio_artifact_command(
         app_state.config.clone()
     };
     let result: StudioArtifactCommandResponse = tauri::async_runtime::spawn_blocking(move || {
-        let migrations_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations");
-        let connection = initialize_database(&config.database_path, &migrations_dir)
+        let connection = initialize_database(&config.database_path, &config.migrations_dir)
             .map_err(|error| error.to_string())?;
         let artifact = create_studio_artifact(
             &connection,
@@ -84,11 +84,10 @@ pub async fn generate_studio_artifact_command(
     };
     let artifact_id = payload.artifact_id.clone();
     let result: StudioArtifactCommandResponse = tauri::async_runtime::spawn_blocking(move || {
-        let migrations_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations");
-        let connection = initialize_database(&config.database_path, &migrations_dir)
+        let connection = initialize_database(&config.database_path, &config.migrations_dir)
             .map_err(|error| error.to_string())?;
         let model_adapter = build_model_adapter(&config.model_settings)?;
-        match generate_studio_artifact(&connection, &config.model_settings, &artifact_id, model_adapter.as_ref()) {
+        match generate_studio_artifact(&connection, &config, &artifact_id, model_adapter.as_ref()) {
             Ok(artifact) => Ok(StudioArtifactCommandResponse { artifact }),
             Err(error) => {
                 let _ = mark_studio_artifact_failed(&connection, &artifact_id, &error);
@@ -120,5 +119,5 @@ pub fn get_studio_artifact_command(
     let app_state = state.lock().map_err(|error| error.to_string())?;
     let artifact = get_studio_artifact(&app_state.db, &payload.artifact_id)?
         .ok_or_else(|| "Studio 产物不存在".to_string())?;
-                Ok::<StudioArtifactCommandResponse, String>(StudioArtifactCommandResponse { artifact })
+    Ok::<StudioArtifactCommandResponse, String>(StudioArtifactCommandResponse { artifact })
 }

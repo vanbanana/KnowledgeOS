@@ -67,7 +67,6 @@ export function KnowledgeGraphWorkspace({
   selectedArtifactId,
   onSelectArtifact
 }: KnowledgeGraphWorkspaceProps) {
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null);
 
   const artifactsQuery = useQuery({
@@ -98,92 +97,60 @@ export function KnowledgeGraphWorkspace({
   const artifact = selectedArtifactQuery.data?.artifact ?? selectedArtifact;
   const preview = useMemo(() => parseGraphPreview(artifact), [artifact]);
   const graph = preview?.graph ?? null;
-  const currentNode = useMemo(
-    () => graph?.nodes.find((node) => node.id === selectedNodeId) ?? graph?.nodes[0] ?? null,
-    [graph?.nodes, selectedNodeId]
-  );
-
-  useEffect(() => {
-    if (currentNode && currentNode.id !== selectedNodeId) {
-      setSelectedNodeId(currentNode.id);
-    }
-  }, [currentNode, selectedNodeId]);
-
   if (!currentProject) {
-    return <section className="workspace-generic-empty">先打开项目，再进入知识网络工作台。</section>;
+    return <section className="workspace-generic-empty">先打开项目，再进入 GraphRAG 图谱页。</section>;
   }
 
   return (
-    <section className="workspace-grid knowledge-graph-workspace-grid">
-      <aside className="workspace-sidepanel">
-        <div className="workspace-panel-title">知识网络结果</div>
-        <div className="workspace-list">
-          {graphArtifacts.map((item) => (
-            <button
-              key={item.artifactId}
-              className={item.artifactId === artifact?.artifactId ? "workspace-list-row workspace-list-row-active" : "workspace-list-row"}
-              onClick={() => onSelectArtifact(item.artifactId)}
-            >
-              <strong>{item.title}</strong>
-              <span>{item.currentStage ?? "等待查看"}</span>
-            </button>
-          ))}
-          {graphArtifacts.length === 0 ? <div className="workspace-generic-empty">当前还没有生成知识网络。</div> : null}
-        </div>
-      </aside>
-
-      <section className="workspace-editor knowledge-graph-editor">
+    <section className="workspace-single-surface knowledge-graph-workspace-grid">
+      <section className="workspace-editor knowledge-graph-editor knowledge-graph-editor-expanded">
         <div className="editor-header">
           <div>
-            <div className="workspace-panel-title">Knowledge Graph</div>
-            <h2>{artifact?.title ?? "知识网络工作台"}</h2>
+            <div className="workspace-panel-title">GraphRAG</div>
+            <h2>{artifact?.title ?? "GraphRAG知识图谱"}</h2>
           </div>
-          {graph ? (
-            <div className="document-status-chip">
-              {graph.nodes.length} 个节点 · {graph.links.length} 条连接
-            </div>
-          ) : null}
+          <div className="editor-header-actions">
+            {graphArtifacts.length > 1 ? (
+              <select
+                className="workspace-inline-select"
+                value={artifact?.artifactId ?? ""}
+                onChange={(event) => onSelectArtifact(event.target.value)}
+              >
+                {graphArtifacts.map((item) => (
+                  <option key={item.artifactId} value={item.artifactId}>
+                    {item.title}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {graph ? (
+              <div className="document-status-chip">
+                {graph.nodes.length} 个节点 · {graph.links.length} 条连接
+              </div>
+            ) : null}
+          </div>
         </div>
         {graph ? (
           <KnowledgeGraphCanvas
             graph={graph}
-            selectedNodeId={selectedNodeId}
             hoveredNodeId={hoveredNodeId}
-            onSelectNode={setSelectedNodeId}
             onHoverNode={setHoveredNodeId}
           />
         ) : (
           <div className="workspace-generic-empty">当前产物还没有可用的网络预览。</div>
         )}
       </section>
-
-      <aside className="workspace-preview">
-        <div className="workspace-panel-title">节点详情</div>
-        {currentNode ? (
-          <div className="detail-card">
-            <strong>{currentNode.label}</strong>
-            <span>连接权重：{currentNode.weight}</span>
-            <span>网络节点 ID：{currentNode.id}</span>
-          </div>
-        ) : (
-          <div className="workspace-generic-empty">点击节点后，这里会显示详情。</div>
-        )}
-      </aside>
     </section>
   );
 }
 
 function KnowledgeGraphCanvas({
   graph,
-  selectedNodeId,
   hoveredNodeId,
-  onSelectNode,
   onHoverNode
 }: {
   graph: NonNullable<GraphPreviewPayload["graph"]>;
-  selectedNodeId: string | null;
   hoveredNodeId: string | null;
-  onSelectNode: (nodeId: string) => void;
   onHoverNode: (nodeId: string | null) => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
@@ -360,7 +327,7 @@ function KnowledgeGraphCanvas({
   }, [panState]);
 
   const nodeMap = new Map(layout.nodes.map((node) => [node.id, node]));
-  const activeNodeId = hoveredNodeId ?? selectedNodeId;
+  const activeNodeId = hoveredNodeId;
   const highlightedNodeIds = new Set<string>();
   const highlightedLinkIds = new Set<string>();
   if (activeNodeId) {
@@ -411,7 +378,7 @@ function KnowledgeGraphCanvas({
         });
       }}
     >
-      <svg viewBox={`0 0 ${size.width} ${size.height}`} className="knowledge-graph-svg" aria-label="知识网络工作台">
+        <svg viewBox={`0 0 ${size.width} ${size.height}`} className="knowledge-graph-svg" aria-label="GraphRAG知识图谱">
         <defs>
           <linearGradient id={gradientId} x1="0%" y1="0%" x2="100%" y2="0%">
             <stop offset="0%" stopColor="rgba(255,255,255,0)" />
@@ -465,7 +432,6 @@ function KnowledgeGraphCanvas({
         })}
         {layout.nodes.map((node) => {
           const radius = getGraphNodeRadius(node);
-          const active = selectedNodeId === node.id;
           const hovered = hoveredNodeId === node.id;
           const emphasized = true;
           const dimmed = activeNodeId !== null && !highlightedNodeIds.has(node.id);
@@ -474,7 +440,6 @@ function KnowledgeGraphCanvas({
               key={node.id}
               transform={`translate(${node.x}, ${node.y})`}
               className={dragState?.nodeId === node.id ? "knowledge-graph-node-group knowledge-graph-node-group-dragging" : "knowledge-graph-node-group"}
-              onClick={() => onSelectNode(node.id)}
               onMouseEnter={() => onHoverNode(node.id)}
               onMouseLeave={() => onHoverNode(null)}
               onPointerDown={(event) => {
@@ -504,7 +469,7 @@ function KnowledgeGraphCanvas({
               <circle
                 r={radius}
                 className={
-                  active || hovered
+                  hovered
                     ? "knowledge-graph-node knowledge-graph-node-active"
                     : dimmed
                       ? `${getGraphNodeClass(node)} knowledge-graph-node-dimmed`

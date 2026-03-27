@@ -17,6 +17,7 @@ import {
   upsertReaderState
 } from "../lib/commands/client";
 import { MarkdownArticle } from "./MarkdownArticle";
+import { StudioDockPanel } from "./StudioDockPanel";
 
 interface ReaderWorkspaceProps {
   currentProject: Project | null;
@@ -25,6 +26,14 @@ interface ReaderWorkspaceProps {
   onSelectDocument: (documentId: string | null) => void;
   bootstrapBlocks: Block[];
   paperAnalyzeTrigger: number;
+  onFocusSearch: () => void;
+  onTriggerPaperAnalyze: () => void;
+  onOpenKnowledgeGraph: (artifactId: string) => void;
+  onOpenKnowledgeGraph3D: (artifactId: string) => void;
+  onOpenPracticeSet: (artifactId: string) => void;
+  onOpenMindMap: (artifactId: string) => void;
+  onOpenPresentation: (artifactId: string) => void;
+  onOpenGraphView: () => void;
 }
 
 interface ChatMessage {
@@ -73,12 +82,12 @@ interface DragPreviewState {
 
 interface PaperExplainViewModel {
   summary: string;
-  roleInPaper: string;
   keyPoints: string[];
+  prerequisites: string[];
+  pitfalls: string[];
+  examples: string[];
+  extension: string;
   terms: { term: string; explanation: string }[];
-  methodOrLogic: string;
-  evidence: string;
-  assumptionsOrLimits: string;
   plainExplanation: string;
   confidence: string;
 }
@@ -89,7 +98,15 @@ export function ReaderWorkspace({
   currentDocument,
   onSelectDocument,
   bootstrapBlocks,
-  paperAnalyzeTrigger
+  paperAnalyzeTrigger,
+  onFocusSearch,
+  onTriggerPaperAnalyze,
+  onOpenKnowledgeGraph,
+  onOpenKnowledgeGraph3D,
+  onOpenPracticeSet,
+  onOpenMindMap,
+  onOpenPresentation,
+  onOpenGraphView
 }: ReaderWorkspaceProps) {
   const queryClient = useQueryClient();
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
@@ -107,6 +124,10 @@ export function ReaderWorkspace({
   const [editingBlockId, setEditingBlockId] = useState<string | null>(null);
   const [editingBlockTitle, setEditingBlockTitle] = useState("");
   const [editingBlockContent, setEditingBlockContent] = useState("");
+  const [utilityPanelKind, setUtilityPanelKind] = useState<"chat" | "studio" | null>("chat");
+  const [utilityPanelWidth, setUtilityPanelWidth] = useState(360);
+  const [utilityResizing, setUtilityResizing] = useState(false);
+  const [readerViewportWidth, setReaderViewportWidth] = useState(1320);
   const [paperExplainProgressByDocument, setPaperExplainProgressByDocument] = useState<Record<string, {
     total: number;
     completed: number;
@@ -133,6 +154,8 @@ export function ReaderWorkspace({
   } | null>(null);
   const dragPayloadRef = useRef<DragInsertPayload | null>(null);
   const dragPointerRef = useRef({ x: 0, y: 0 });
+  const utilityResizeStartRef = useRef<{ x: number; width: number } | null>(null);
+  const readerLayoutRef = useRef<HTMLElement | null>(null);
 
   const fallbackBlocks = useMemo(
     () => bootstrapBlocks.filter((block) => block.documentId === currentDocument?.documentId),
@@ -310,6 +333,52 @@ export function ReaderWorkspace({
     element.style.height = `${nextHeight}px`;
     element.style.overflowY = element.scrollHeight > 132 ? "auto" : "hidden";
   }, [chatDraft, referencedBlockId]);
+
+  useEffect(() => {
+    const host = readerLayoutRef.current;
+    if (!host) {
+      return;
+    }
+    const syncReaderWidth = () => {
+      setReaderViewportWidth(Math.max(360, Math.floor(host.clientWidth)));
+    };
+    syncReaderWidth();
+    const observer = new ResizeObserver(syncReaderWidth);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    setUtilityPanelWidth((current) => {
+      const maxWidth = Math.max(300, readerViewportWidth - 180);
+      return Math.min(current, maxWidth);
+    });
+  }, [readerViewportWidth]);
+
+  useEffect(() => {
+    function handlePointerMove(event: MouseEvent) {
+      const current = utilityResizeStartRef.current;
+      if (!current) {
+        return;
+      }
+      const delta = current.x - event.clientX;
+      const maxWidth = Math.min(620, Math.max(320, readerViewportWidth - 180));
+      const nextWidth = Math.min(maxWidth, Math.max(300, current.width + delta));
+      setUtilityPanelWidth(nextWidth);
+    }
+
+    function handlePointerUp() {
+      utilityResizeStartRef.current = null;
+      setUtilityResizing(false);
+    }
+
+    window.addEventListener("mousemove", handlePointerMove);
+    window.addEventListener("mouseup", handlePointerUp);
+    return () => {
+      window.removeEventListener("mousemove", handlePointerMove);
+      window.removeEventListener("mouseup", handlePointerUp);
+    };
+  }, [readerViewportWidth]);
 
   useEffect(() => {
     const body = chatBodyRef.current;
@@ -1001,8 +1070,23 @@ export function ReaderWorkspace({
     };
   }
 
+  const showUtilityPanel = utilityPanelKind !== null;
+  const compactReaderLayout = readerViewportWidth <= 760;
+  const utilityReservedWidth = showUtilityPanel && !compactReaderLayout ? utilityPanelWidth + 48 : 48;
+  const utilityPanelDrawerWidth = Math.min(
+    460,
+    Math.max(280, readerViewportWidth <= 920 ? readerViewportWidth - 72 : readerViewportWidth - 96)
+  );
+
   return (
-    <>
+    <section
+      ref={readerLayoutRef}
+      className={[
+        showUtilityPanel ? "reader-layout reader-layout-panel-open" : "reader-layout",
+        compactReaderLayout ? "reader-layout-compact" : ""
+      ].filter(Boolean).join(" ")}
+      style={{ ["--utility-panel-space" as string]: `${utilityReservedWidth}px` }}
+    >
       <section className="main-pane">
         <div className="document-stage">
           {!currentProject ? (
@@ -1050,7 +1134,7 @@ export function ReaderWorkspace({
                     {currentPaperExplainProgress ? (
                       <div className="paper-analysis-progress">
                         <div className="paper-analysis-progress-header">
-                          <span>全文论文解析</span>
+                          <span>学习解析模式</span>
                           <span>
                             {currentPaperExplainProgress.completed + currentPaperExplainProgress.failed}/{currentPaperExplainProgress.total}
                           </span>
@@ -1213,168 +1297,272 @@ export function ReaderWorkspace({
         </div>
       </section>
 
-      <aside className="chat-pane chat-pane-flat">
-        <div className="chat-pane-header">
-          <span>AI Chat</span>
-        </div>
-
-        <div className="chat-pane-body" ref={chatBodyRef}>
-          <div className="chat-stream">
-            {chatMessages.map((message) => (
+      <aside
+        className={
+          compactReaderLayout && showUtilityPanel
+            ? "utility-dock-shell utility-dock-shell-overlay"
+            : "utility-dock-shell"
+        }
+      >
+        {showUtilityPanel ? (
+          <>
+            {compactReaderLayout ? (
+              <button
+                className="utility-panel-backdrop"
+                onClick={() => setUtilityPanelKind(null)}
+                aria-label="关闭面板"
+              />
+            ) : (
               <div
-                key={message.id}
-                className={
-                  message.role === "assistant"
-                    ? [
-                      `chat-message chat-message-${message.role}`,
-                      "chat-message-card",
-                      "chat-message-draggable",
-                      message.isStreaming ? "chat-message-streaming" : "",
-                      draggingMessageId === message.id ? "chat-message-dragging" : ""
-                    ].filter(Boolean).join(" ")
-                    : `chat-message chat-message-${message.role}`
-                }
-                onDragEnd={() => {
-                  setDropIndex(null);
-                  setDraggingMessageId(null);
+                className={utilityResizing ? "utility-panel-resizer utility-panel-resizer-active" : "utility-panel-resizer"}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  utilityResizeStartRef.current = {
+                    x: event.clientX,
+                    width: utilityPanelWidth
+                  };
+                  setUtilityResizing(true);
                 }}
-              >
-                <div className="chat-message-head">
-                  <div className="chat-message-role">{message.role === "assistant" ? "AI" : "你"}</div>
-                  {message.role === "assistant" ? (
-                    <button
-                      className="chat-message-drag-handle"
-                      onMouseDown={(event) => handleAssistantBlockDragMouseDown(event, message)}
-                      aria-label="拖动整块回复"
-                      title="拖动整块回复"
-                    >
-                      <SvgGripIcon />
-                    </button>
-                  ) : null}
-                </div>
-                <div
-                  onDragStart={(event) => {
-                    event.preventDefault();
-                  }}
-                  className={
-                    message.isStreaming
-                      ? "chat-message-content chat-message-content-streaming"
-                      : "chat-message-content"
-                  }
-                  onMouseDown={(event) => {
-                    if (message.role !== "assistant") {
-                      return;
-                    }
-                    handleAssistantSelectionMouseDown(event, message);
-                  }}
-                >
-                  {message.mode === "agent" && message.agentState ? (
-                    <div className="agent-chat-card">
+              />
+            )}
+            <div className={compactReaderLayout ? "utility-panel utility-panel-overlay" : "utility-panel"} style={{ width: compactReaderLayout ? utilityPanelDrawerWidth : utilityPanelWidth }}>
+              {showUtilityPanel ? (
+                <>
+                  {utilityPanelKind === "chat" ? (
+                    <>
+                      <div className="chat-pane-header chat-pane-header-compact">
+                        <span>对话</span>
+                      </div>
+                      <div className="chat-pane-body" ref={chatBodyRef}>
+                        <div className="chat-stream">
+                          {chatMessages.map((message) => (
+                            <div
+                              key={message.id}
+                              className={
+                                message.role === "assistant"
+                                  ? [
+                                    `chat-message chat-message-${message.role}`,
+                                    "chat-message-card",
+                                    "chat-message-draggable",
+                                    message.isStreaming ? "chat-message-streaming" : "",
+                                    draggingMessageId === message.id ? "chat-message-dragging" : ""
+                                  ].filter(Boolean).join(" ")
+                                  : `chat-message chat-message-${message.role}`
+                              }
+                              onDragEnd={() => {
+                                setDropIndex(null);
+                                setDraggingMessageId(null);
+                              }}
+                            >
+                              <div className="chat-message-head">
+                                <div className="chat-message-role">{message.role === "assistant" ? "AI" : "你"}</div>
+                                {message.role === "assistant" ? (
+                                  <button
+                                    className="chat-message-drag-handle"
+                                    onMouseDown={(event) => handleAssistantBlockDragMouseDown(event, message)}
+                                    aria-label="拖动整块回复"
+                                    title="拖动整块回复"
+                                  >
+                                    <SvgGripIcon />
+                                  </button>
+                                ) : null}
+                              </div>
+                              <div
+                                onDragStart={(event) => {
+                                  event.preventDefault();
+                                }}
+                                className={
+                                  message.isStreaming
+                                    ? "chat-message-content chat-message-content-streaming"
+                                    : "chat-message-content"
+                                }
+                                onMouseDown={(event) => {
+                                  if (message.role !== "assistant") {
+                                    return;
+                                  }
+                                  handleAssistantSelectionMouseDown(event, message);
+                                }}
+                              >
+                                {message.mode === "agent" && message.agentState ? (
+                                  <div className="agent-chat-card">
+                                    <div
+                                      className={
+                                        message.agentState.status === "planning" || message.agentState.status === "previewing" || message.agentState.status === "executing"
+                                          ? "agent-chat-summary agent-chat-summary-thinking"
+                                          : "agent-chat-summary"
+                                      }
+                                    >
+                                      {message.agentState.summary}
+                                    </div>
+                                    <div className="agent-chat-timeline">
+                                      {message.agentState.timeline.map((item) => (
+                                        <details key={item.id} className={`agent-chat-step agent-chat-step-${item.status}`}>
+                                          <summary className="agent-chat-step-summary">
+                                            <span className="agent-chat-step-title">{item.title}</span>
+                                            <span className="agent-chat-step-status">{renderAgentStepStatus(item.status)}</span>
+                                          </summary>
+                                          <div className="agent-chat-step-body">
+                                            <div>{item.summary}</div>
+                                            {item.detail ? <pre className="agent-chat-step-detail">{item.detail}</pre> : null}
+                                          </div>
+                                        </details>
+                                      ))}
+                                    </div>
+                                    {message.agentState.result ? (
+                                      <div className="agent-chat-result">
+                                        <div className="agent-chat-result-title">结果</div>
+                                        <MarkdownArticle content={message.agentState.result} className="markdown-article-chat" />
+                                      </div>
+                                    ) : null}
+                                  </div>
+                                ) : message.role === "assistant" ? (
+                                  message.isStreaming && !message.content.trim() ? (
+                                    <span className="chat-message-typing">正在输入…</span>
+                                  ) : (
+                                    <MarkdownArticle content={message.content} className="markdown-article-chat" />
+                                  )
+                                ) : (
+                                  message.content
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+
                       <div
                         className={
-                          message.agentState.status === "planning" || message.agentState.status === "previewing" || message.agentState.status === "executing"
-                            ? "agent-chat-summary agent-chat-summary-thinking"
-                            : "agent-chat-summary"
+                          referencedBlock
+                            ? "chat-input-shell chat-input-shell-flat chat-input-shell-has-reference"
+                            : "chat-input-shell chat-input-shell-flat"
                         }
                       >
-                        {message.agentState.summary}
-                      </div>
-                      <div className="agent-chat-timeline">
-                        {message.agentState.timeline.map((item) => (
-                          <details key={item.id} className={`agent-chat-step agent-chat-step-${item.status}`}>
-                            <summary className="agent-chat-step-summary">
-                              <span className="agent-chat-step-title">{item.title}</span>
-                              <span className="agent-chat-step-status">{renderAgentStepStatus(item.status)}</span>
-                            </summary>
-                            <div className="agent-chat-step-body">
-                              <div>{item.summary}</div>
-                              {item.detail ? <pre className="agent-chat-step-detail">{item.detail}</pre> : null}
+                        {referencedBlock ? (
+                          <div className="chat-reference-bar chat-reference-bar-overlay">
+                            <div className="chat-reference-chip">
+                              <span className="chat-reference-prefix">↓</span>
+                              <span className="chat-reference-title">{buildReferenceTitle(referencedBlock)}</span>
+                              <button
+                                className="chat-reference-clear"
+                                onClick={() => setReferencedBlockId(null)}
+                              >
+                                ×
+                              </button>
                             </div>
-                          </details>
-                        ))}
-                      </div>
-                      {message.agentState.result ? (
-                        <div className="agent-chat-result">
-                          <div className="agent-chat-result-title">结果</div>
-                          <MarkdownArticle content={message.agentState.result} className="markdown-article-chat" />
+                          </div>
+                        ) : null}
+
+                        <textarea
+                          ref={chatInputRef}
+                          className="chat-input chat-input-flat"
+                          rows={1}
+                          value={chatDraft}
+                          onChange={(event) => setChatDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key !== "Enter" || event.shiftKey) {
+                              return;
+                            }
+                            event.preventDefault();
+                            handleSendChat();
+                          }}
+                          placeholder={chatMode === "agent" ? "输入要 Agent 执行的自然语言任务" : "输入问题"}
+                        />
+                        <div className="chat-input-footer chat-input-footer-compact">
+                          <div className="utility-mode-switch utility-mode-switch-inline">
+                            <button
+                              className={chatMode === "ask" ? "utility-mode-button utility-mode-button-active" : "utility-mode-button"}
+                              onClick={() => setChatMode("ask")}
+                            >
+                              Ask
+                            </button>
+                            <button
+                              className={chatMode === "agent" ? "utility-mode-button utility-mode-button-active" : "utility-mode-button"}
+                              onClick={() => setChatMode("agent")}
+                            >
+                              Agent
+                            </button>
+                          </div>
+                          <button
+                            className="send-button"
+                            disabled={chatMutation.isPending || agentRunning}
+                            onClick={handleSendChat}
+                          >
+                            {agentRunning ? "执行中" : "发送"}
+                          </button>
                         </div>
-                      ) : null}
-                    </div>
-                  ) : message.role === "assistant" ? (
-                    message.isStreaming && !message.content.trim() ? (
-                      <span className="chat-message-typing">正在输入…</span>
-                    ) : (
-                      <MarkdownArticle content={message.content} className="markdown-article-chat" />
-                    )
-                  ) : (
-                    message.content
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div
-          className={
-            referencedBlock
-              ? "chat-input-shell chat-input-shell-flat chat-input-shell-has-reference"
-              : "chat-input-shell chat-input-shell-flat"
-          }
-        >
-          {referencedBlock ? (
-            <div className="chat-reference-bar chat-reference-bar-overlay">
-              <div className="chat-reference-chip">
-                <span className="chat-reference-prefix">↓</span>
-                <span className="chat-reference-title">{buildReferenceTitle(referencedBlock)}</span>
-                <button
-                  className="chat-reference-clear"
-                  onClick={() => setReferencedBlockId(null)}
-                >
-                  ×
-                </button>
-              </div>
+                      </div>
+                    </>
+                  ) : utilityPanelKind === "studio" ? (
+                    <StudioDockPanel
+                      currentProject={currentProject}
+                      documents={documents}
+                      onOpenKnowledgeGraph={onOpenKnowledgeGraph}
+                      onOpenKnowledgeGraph3D={onOpenKnowledgeGraph3D}
+                      onOpenPracticeSet={onOpenPracticeSet}
+                      onOpenMindMap={onOpenMindMap}
+                      onOpenPresentation={onOpenPresentation}
+                    />
+                  ) : null}
+                </>
+              ) : null}
             </div>
-          ) : null}
+          </>
+        ) : null}
 
-          <textarea
-            ref={chatInputRef}
-            className="chat-input chat-input-flat"
-            rows={1}
-            value={chatDraft}
-            onChange={(event) => setChatDraft(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key !== "Enter" || event.shiftKey) {
-                return;
-              }
-              event.preventDefault();
-              handleSendChat();
+        <div className="utility-rail">
+          <button
+            className="utility-rail-button"
+            onClick={onFocusSearch}
+            aria-label="搜索"
+            title="搜索"
+          >
+            <SvgSearchIcon />
+          </button>
+          <button
+            className="utility-rail-button utility-rail-button-active"
+            onClick={() => onSelectDocument(currentDocument?.documentId ?? null)}
+            aria-label="阅读器"
+            title="阅读器"
+          >
+            <SvgDocumentIcon />
+          </button>
+          <button
+            className="utility-rail-button"
+            onClick={onTriggerPaperAnalyze}
+            aria-label="学习解析模式"
+            title="学习解析模式"
+          >
+            <SvgPaperExplainIcon />
+          </button>
+          <button
+            className="utility-rail-button"
+            onClick={onOpenGraphView}
+            aria-label="图谱"
+            title="图谱"
+          >
+            <SvgGraphIcon />
+          </button>
+          <div className="utility-rail-spacer" />
+          <button
+            className={utilityPanelKind === "chat" ? "utility-rail-button utility-rail-button-active" : "utility-rail-button"}
+            onClick={() => {
+              setUtilityPanelKind((current) => current === "chat" ? null : "chat");
             }}
-            placeholder={chatMode === "agent" ? "输入要 Agent 执行的自然语言任务" : "输入问题"}
-          />
-          <div className="chat-input-footer">
-            <div className="chat-mode-switch">
-              <button
-                className={chatMode === "ask" ? "chat-mode-button chat-mode-button-active" : "chat-mode-button"}
-                onClick={() => setChatMode("ask")}
-              >
-                Ask
-              </button>
-              <button
-                className={chatMode === "agent" ? "chat-mode-button chat-mode-button-active" : "chat-mode-button"}
-                onClick={() => setChatMode("agent")}
-              >
-                Agent
-              </button>
-            </div>
-            <button
-              className="send-button"
-              disabled={chatMutation.isPending || agentRunning}
-              onClick={handleSendChat}
-            >
-              {agentRunning ? "执行中" : "发送"}
-            </button>
-          </div>
+            aria-label="对话"
+            title="对话"
+          >
+            <SvgChatIcon />
+          </button>
+          <button
+            className={utilityPanelKind === "studio" ? "utility-rail-button utility-rail-button-active" : "utility-rail-button"}
+            onClick={() => {
+              setUtilityPanelKind((current) => current === "studio" ? null : "studio");
+            }}
+            aria-label="Studio"
+            title="Studio"
+          >
+            <SvgStudioIcon />
+          </button>
         </div>
 
         {dragPreview ? (
@@ -1389,7 +1577,7 @@ export function ReaderWorkspace({
           </div>
         ) : null}
       </aside>
-    </>
+    </section>
   );
 }
 
@@ -1460,7 +1648,7 @@ function PaperExplainPanel({
     return (
       <div className="paper-explain-panel paper-explain-panel-pending">
         <div className="paper-explain-header">
-          <span className="paper-explain-title">论文解析</span>
+          <span className="paper-explain-title">学习解析模式</span>
           <span className="paper-explain-status">解析中</span>
         </div>
         <div className="paper-explain-shimmer" />
@@ -1472,10 +1660,10 @@ function PaperExplainPanel({
     return (
       <div className="paper-explain-panel paper-explain-panel-failed">
         <div className="paper-explain-header">
-          <span className="paper-explain-title">论文解析</span>
+          <span className="paper-explain-title">学习解析模式</span>
           <span className="paper-explain-status">失败</span>
         </div>
-        <div className="paper-explain-text">当前块解析失败，你可以再次触发全文解析。</div>
+        <div className="paper-explain-text">当前块解析失败，你可以再次触发学习解析模式。</div>
       </div>
     );
   }
@@ -1488,26 +1676,34 @@ function PaperExplainPanel({
   return (
     <div className="paper-explain-panel">
       <div className="paper-explain-header">
-        <span className="paper-explain-title">论文解析</span>
+        <span className="paper-explain-title">学习解析模式</span>
         <span className="paper-explain-status">{formatPaperConfidence(parsed.confidence)}</span>
       </div>
       <div className="paper-explain-section">
-        <div className="paper-explain-label">核心解读</div>
+        <div className="paper-explain-label">学习要点</div>
         <div className="paper-explain-text">{parsed.summary}</div>
       </div>
       <div className="paper-explain-section-grid">
         <div className="paper-explain-section">
-          <div className="paper-explain-label">在论文中的作用</div>
-          <div className="paper-explain-text">{parsed.roleInPaper}</div>
+          <div className="paper-explain-label">前置知识</div>
+          {parsed.prerequisites.length > 0 ? (
+            <ul className="paper-explain-list">
+              {parsed.prerequisites.map((item, index) => (
+                <li key={`${index}-${item}`}>{item}</li>
+              ))}
+            </ul>
+          ) : (
+            <div className="paper-explain-text">当前块未提供充分信息</div>
+          )}
         </div>
         <div className="paper-explain-section">
-          <div className="paper-explain-label">白话解释</div>
+          <div className="paper-explain-label">直白解释</div>
           <div className="paper-explain-text">{parsed.plainExplanation}</div>
         </div>
       </div>
       {parsed.keyPoints.length > 0 ? (
         <div className="paper-explain-section">
-          <div className="paper-explain-label">关键要点</div>
+          <div className="paper-explain-label">重点清单</div>
           <ul className="paper-explain-list">
             {parsed.keyPoints.map((item, index) => (
               <li key={`${index}-${item}`}>{item}</li>
@@ -1530,17 +1726,33 @@ function PaperExplainPanel({
       ) : null}
       <div className="paper-explain-section-grid">
         <div className="paper-explain-section">
-          <div className="paper-explain-label">方法或逻辑</div>
-          <div className="paper-explain-text">{parsed.methodOrLogic}</div>
+          <div className="paper-explain-label">常见误区</div>
+          {parsed.pitfalls.length > 0 ? (
+            <ul className="paper-explain-list">
+              {parsed.pitfalls.map((item, index) => (
+                <li key={`${index}-${item}`}>{item}</li>
+              ))}
+            </ul>
+          ) : (
+            <div className="paper-explain-text">当前块未体现</div>
+          )}
         </div>
         <div className="paper-explain-section">
-          <div className="paper-explain-label">证据或现象</div>
-          <div className="paper-explain-text">{parsed.evidence}</div>
+          <div className="paper-explain-label">理解例子</div>
+          {parsed.examples.length > 0 ? (
+            <ul className="paper-explain-list">
+              {parsed.examples.map((item, index) => (
+                <li key={`${index}-${item}`}>{item}</li>
+              ))}
+            </ul>
+          ) : (
+            <div className="paper-explain-text">当前块未提供充分信息</div>
+          )}
         </div>
       </div>
       <div className="paper-explain-section">
-        <div className="paper-explain-label">假设与限制</div>
-        <div className="paper-explain-text">{parsed.assumptionsOrLimits}</div>
+        <div className="paper-explain-label">继续拓展</div>
+        <div className="paper-explain-text">{parsed.extension}</div>
       </div>
     </div>
   );
@@ -1611,37 +1823,49 @@ function safeParseJson(input: string) {
 function parsePaperExplanation(explanation: BlockExplanation): PaperExplainViewModel {
   const parsed = safeParsePaperJson(explanation.rawResponseJson);
   const parsedContent = parsed?.parsed_content ?? null;
+  const keyPoints = normalizePaperStringList(
+    parsed?.keyPoints
+      ?? readPaperStringArray(parsedContent, ["key_points", "最重要要点", "最重要的要点", "要点", "重点"])
+      ?? []
+  );
+  const prerequisites = normalizePaperStringList(
+    parsed?.prerequisites
+      ?? readPaperStringArray(parsedContent, ["prerequisites", "前置知识", "前置"])
+      ?? safeParseStringList(explanation.prerequisitesJson)
+      ?? []
+  );
+  const pitfalls = normalizePaperStringList(
+    parsed?.pitfalls
+      ?? readPaperStringArray(parsedContent, ["pitfalls", "误区", "常见误区"])
+      ?? safeParseStringList(explanation.pitfallsJson)
+      ?? []
+  );
+  const examples = normalizePaperStringList(
+    parsed?.examples
+      ?? readPaperStringArray(parsedContent, ["examples", "例子", "类比", "应用场景"])
+      ?? safeParseStringList(explanation.examplesJson)
+      ?? []
+  );
+
   return {
     summary:
       parsed?.summary
       ?? readPaperString(parsedContent, ["what_is_this_block_about", "当前块主题", "说明当前块到底在讲什么", "当前块内容概述"])
       ?? explanation.summary
       ?? "当前块已完成解析。",
-    roleInPaper:
-      parsed?.roleInPaper
-      ?? readPaperString(parsedContent, ["role_in_paper", "在论文中的作用", "在论文整体中的作用"])
+    keyPoints,
+    prerequisites,
+    pitfalls,
+    examples,
+    extension:
+      parsed?.extension
+      ?? readPaperString(parsedContent, ["extension", "拓展", "延伸理解", "further_exploration", "related_extension"])
       ?? explanation.roleInDocument
-      ?? "当前块未提供充分信息",
-    keyPoints:
-      parsed?.keyPoints
-      ?? readPaperStringArray(parsedContent, ["key_points", "最重要要点", "最重要的要点"])
-      ?? [],
+      ?? "可以继续追问相关概念、应用场景和延伸知识。",
     terms:
       parsed?.terms
       ?? readPaperTerms(parsedContent, ["terms", "key_terms", "关键术语解释"])
       ?? [],
-    methodOrLogic:
-      parsed?.methodOrLogic
-      ?? readPaperString(parsedContent, ["method_or_logic", "core_logic_if_method", "core_logic_if_method_or_experiment", "core_logic_if_applicable", "核心逻辑", "核心逻辑或证据"])
-      ?? "当前块未提供充分信息",
-    evidence:
-      parsed?.evidence
-      ?? readPaperString(parsedContent, ["evidence", "evidence_if_applicable", "evidence_if_results", "evidence_if_results_or_observations", "证据或结果", "证据或现象"])
-      ?? "当前块未提供充分信息",
-    assumptionsOrLimits:
-      parsed?.assumptionsOrLimits
-      ?? readPaperString(parsedContent, ["assumptions_or_limits", "assumptions_limitations", "assumptions_limitations_boundaries", "assumptions_limitations_if_applicable", "假设、限制或边界条件"])
-      ?? "当前块未体现",
     plainExplanation:
       parsed?.plainExplanation
       ?? readPaperString(parsedContent, ["plain_language_explanation", "plain_explanation", "直白解释"])
@@ -1656,16 +1880,32 @@ function safeParsePaperJson(input: string) {
   try {
     return JSON.parse(input) as {
       summary?: string;
-      roleInPaper?: string;
       keyPoints?: string[];
+      prerequisites?: string[];
+      pitfalls?: string[];
+      examples?: string[];
+      extension?: string;
       terms?: { term: string; explanation: string }[];
-      methodOrLogic?: string;
-      evidence?: string;
-      assumptionsOrLimits?: string;
       plainExplanation?: string;
       confidence?: string;
       parsed_content?: Record<string, unknown>;
     };
+  } catch {
+    return null;
+  }
+}
+
+function safeParseStringList(input: string) {
+  try {
+    const parsed = JSON.parse(input) as unknown;
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+    const items = parsed
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    return items.length > 0 ? items : null;
   } catch {
     return null;
   }
@@ -1786,6 +2026,31 @@ function normalizeTermsFromUnknown(value: unknown) {
   return null;
 }
 
+function normalizePaperStringList(value: unknown) {
+  if (Array.isArray(value)) {
+    return value
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  if (typeof value === "string") {
+    return value
+      .split(/\r?\n/)
+      .map((line) => line.trim().replace(/^[\d.\-•\s]+/, "").trim())
+      .filter(Boolean);
+  }
+
+  if (value && typeof value === "object") {
+    return Object.values(value as Record<string, unknown>)
+      .filter((item): item is string => typeof item === "string")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  return [];
+}
+
 function formatPaperConfidence(confidence: string) {
   if (confidence === "high") {
     return "高可信";
@@ -1862,6 +2127,71 @@ function SvgGripIcon() {
       <circle cx="11" cy="8" r="0.9" />
       <circle cx="5" cy="11.5" r="0.9" />
       <circle cx="11" cy="11.5" r="0.9" />
+    </svg>
+  );
+}
+
+function SvgChatIcon() {
+  return (
+    <svg className="inline-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M3 4.2H13V10.2H6.8L4 12.8V10.2H3V4.2Z" />
+    </svg>
+  );
+}
+
+function SvgSearchIcon() {
+  return (
+    <svg className="inline-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="7" cy="7" r="3.5" />
+      <path d="M10 10L13 13" />
+    </svg>
+  );
+}
+
+function SvgDocumentIcon() {
+  return (
+    <svg className="inline-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M4.2 2.5H9.4L11.8 4.9V13.5H4.2V2.5Z" />
+      <path d="M9.2 2.8V5.2H11.6" />
+    </svg>
+  );
+}
+
+function SvgPaperExplainIcon() {
+  return (
+    <svg className="inline-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M4 2.5H9.5L12 5V13.5H4V2.5Z" />
+      <path d="M6 6.5H10" />
+      <path d="M6 8.7H10" />
+      <path d="M6 10.9H8.8" />
+      <path d="M11.8 11.6L13.8 13.6" />
+      <circle cx="10.5" cy="10.3" r="2.1" />
+    </svg>
+  );
+}
+
+function SvgGraphIcon() {
+  return (
+    <svg className="inline-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <circle cx="3.5" cy="8" r="1.5" />
+      <circle cx="8" cy="4" r="1.5" />
+      <circle cx="12.5" cy="8" r="1.5" />
+      <circle cx="8" cy="12" r="1.5" />
+      <path d="M4.8 7L6.8 5" />
+      <path d="M9.2 5L11.2 7" />
+      <path d="M11.2 9L9.2 11" />
+      <path d="M6.8 11L4.8 9" />
+    </svg>
+  );
+}
+
+function SvgStudioIcon() {
+  return (
+    <svg className="inline-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+      <rect x="2.5" y="3" width="11" height="10" rx="1.5" />
+      <path d="M5 5.5H11" />
+      <path d="M5 8H8.6" />
+      <path d="M5 10.5H9.8" />
     </svg>
   );
 }

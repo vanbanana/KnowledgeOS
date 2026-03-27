@@ -6,11 +6,11 @@ use serde_json::{Map, Value};
 
 use crate::ai::model_adapter::{ModelRequest, build_model_adapter};
 use crate::config::AppConfig;
+use crate::services::agent::tools::{is_registered_tool, tool_registry};
 use crate::services::agent::{
     AGENT_STATUS_PLANNED, AgentPlan, AgentPlanStep, AgentTaskRecord, append_task_log,
     create_agent_task, save_agent_plan,
 };
-use crate::services::agent::tools::{is_registered_tool, tool_registry};
 use crate::services::card::list_cards;
 use crate::services::graph::list_nodes;
 use crate::services::import::list_documents;
@@ -65,7 +65,8 @@ pub fn plan_agent_task(
     let task = create_agent_task(&app_state.db, project_id, task_text, Some("agent.plan"))?;
     append_task_log(&app_state.db, &task.task_id, "info", "已创建 Agent 任务")?;
 
-    let grounding = build_planner_grounding(app_state, project_id, &project.root_path, &project.name)?;
+    let grounding =
+        build_planner_grounding(app_state, project_id, &project.root_path, &project.name)?;
     let plan = match generate_plan_with_model(&app_state.config, task_text, &grounding) {
         Ok(plan) => sanitize_plan(plan, project_id, task_text, &grounding),
         Err(_) => build_fallback_plan(project_id, task_text, &grounding),
@@ -79,7 +80,12 @@ pub fn plan_agent_task(
         &format!("已生成计划，共 {} 步", plan.steps.len()),
     )?;
     if task.status == AGENT_STATUS_PLANNED {
-        append_task_log(&app_state.db, &task.task_id, "info", "该任务无需额外审批，可直接执行")?;
+        append_task_log(
+            &app_state.db,
+            &task.task_id,
+            "info",
+            "该任务无需额外审批，可直接执行",
+        )?;
     }
     Ok((task, plan))
 }
@@ -96,9 +102,7 @@ fn build_planner_grounding(
         .into_iter()
         .map(|document| GroundedDocument {
             document_id: document.document_id,
-            title: document
-                .title
-                .unwrap_or_else(|| "未命名文档".to_string()),
+            title: document.title.unwrap_or_else(|| "未命名文档".to_string()),
             source_type: document.source_type,
             parse_status: document.parse_status,
             relative_source_path: to_project_relative_path(root, &document.source_path),
@@ -140,17 +144,22 @@ fn generate_plan_with_model(
     grounding: &PlannerGrounding,
 ) -> Result<AgentPlan, String> {
     let adapter = build_model_adapter(&config.model_settings)?;
-    let prompt_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("..")
-        .join("packages")
-        .join("prompt-templates")
-        .join("agent_planner_system.md");
+    let prompt_path = config.prompt_templates_dir.join("agent_planner_system.md");
     let system_prompt = fs::read_to_string(prompt_path).map_err(|error| error.to_string())?;
     let tools = tool_registry()
         .into_iter()
-        .map(|tool| format!("- {}：{}（{}）", tool.name, tool.description, if tool.allows_write { "可写" } else { "只读" }))
+        .map(|tool| {
+            format!(
+                "- {}：{}（{}）",
+                tool.name,
+                tool.description,
+                if tool.allows_write {
+                    "可写"
+                } else {
+                    "只读"
+                }
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
     let grounding_json =
@@ -187,7 +196,8 @@ fn sanitize_plan(
         plan.planner_version
     };
     plan.requires_approval = true;
-    plan.steps.retain(|step| is_registered_tool(&step.tool_name));
+    plan.steps
+        .retain(|step| is_registered_tool(&step.tool_name));
 
     let mut last_document_id: Option<String> = None;
     let mut last_generated_path: Option<String> = None;
@@ -246,8 +256,13 @@ fn resolve_step_arguments(
             }
         }
         "read_document" => {
-            if let Some(document) = resolve_document_reference(&args, step, task_text, grounding, last_document_id) {
-                args.insert("documentId".to_string(), Value::String(document.document_id.clone()));
+            if let Some(document) =
+                resolve_document_reference(&args, step, task_text, grounding, last_document_id)
+            {
+                args.insert(
+                    "documentId".to_string(),
+                    Value::String(document.document_id.clone()),
+                );
                 args.insert(
                     "path".to_string(),
                     Value::String(document.relative_source_path.clone()),
@@ -260,8 +275,13 @@ fn resolve_step_arguments(
             }
         }
         "rename_file" | "move_file" | "delete_file" => {
-            if let Some(document) = resolve_document_reference(&args, step, task_text, grounding, last_document_id) {
-                args.insert("documentId".to_string(), Value::String(document.document_id.clone()));
+            if let Some(document) =
+                resolve_document_reference(&args, step, task_text, grounding, last_document_id)
+            {
+                args.insert(
+                    "documentId".to_string(),
+                    Value::String(document.document_id.clone()),
+                );
                 resolved_document_id = Some(document.document_id.clone());
             }
         }
@@ -301,7 +321,10 @@ fn resolve_step_arguments(
                     }
                 }
             } else if should_generate_content(&args)
-                && args.get("sourceDocumentId").and_then(Value::as_str).is_none()
+                && args
+                    .get("sourceDocumentId")
+                    .and_then(Value::as_str)
+                    .is_none()
                 && args.get("sourcePath").and_then(Value::as_str).is_none()
                 && let Some(path) = last_generated_path
             {
@@ -356,7 +379,10 @@ fn resolve_document_reference<'a>(
         .get("documentId")
         .or_else(|| args.get("sourceDocumentId"))
         .and_then(Value::as_str)
-        && let Some(document) = grounding.documents.iter().find(|item| item.document_id == document_id)
+        && let Some(document) = grounding
+            .documents
+            .iter()
+            .find(|item| item.document_id == document_id)
     {
         return Some(document);
     }
@@ -453,7 +479,11 @@ fn score_document_match(document: &GroundedDocument, term: &str) -> i32 {
         .unwrap_or_default();
 
     let mut score = 0;
-    for haystack in [title.as_str(), source_path.as_str(), normalized_path.as_str()] {
+    for haystack in [
+        title.as_str(),
+        source_path.as_str(),
+        normalized_path.as_str(),
+    ] {
         if haystack.is_empty() {
             continue;
         }
@@ -533,7 +563,10 @@ fn should_generate_content(args: &Map<String, Value>) -> bool {
 fn is_scratch_generation_task(task_text: &str) -> bool {
     let text = task_text.trim();
     (text.contains("测试") || text.contains("示例") || text.contains("demo"))
-        && (text.contains("md") || text.contains("markdown") || text.contains("文档") || text.contains("笔记"))
+        && (text.contains("md")
+            || text.contains("markdown")
+            || text.contains("文档")
+            || text.contains("笔记"))
 }
 
 fn is_placeholder_content(content: &str) -> bool {
@@ -610,7 +643,9 @@ fn normalize_reference_text(value: &str) -> String {
         .replace(".pptx", "");
     cleaned
         .chars()
-        .filter(|char| char.is_alphanumeric() || !char.is_ascii_punctuation() && !char.is_whitespace())
+        .filter(|char| {
+            char.is_alphanumeric() || !char.is_ascii_punctuation() && !char.is_whitespace()
+        })
         .collect::<String>()
 }
 
@@ -618,7 +653,12 @@ fn slugify(value: &str) -> String {
     let normalized = value
         .chars()
         .map(|char| {
-            if char.is_whitespace() || matches!(char, '/' | '\\' | ':' | '：' | '|' | '?' | '*' | '"' | '<' | '>') {
+            if char.is_whitespace()
+                || matches!(
+                    char,
+                    '/' | '\\' | ':' | '：' | '|' | '?' | '*' | '"' | '<' | '>'
+                )
+            {
                 '-'
             } else {
                 char
@@ -688,7 +728,9 @@ fn build_fallback_plan(
             arguments_json: "{\"documentId\":\"\"}".to_string(),
             target_refs: vec![format!("project:{project_id}")],
         }
-    } else if task_text.contains("关系") && (task_text.contains("删除") || task_text.contains("移除")) {
+    } else if task_text.contains("关系")
+        && (task_text.contains("删除") || task_text.contains("移除"))
+    {
         AgentPlanStep {
             step_id: "step-1".to_string(),
             title: "删除图谱关系".to_string(),
@@ -705,8 +747,8 @@ fn build_fallback_plan(
             tool_name: "create_relation".to_string(),
             reason: "任务文本包含关系创建诉求".to_string(),
             risk_level: "medium".to_string(),
-            arguments_json:
-                "{\"fromNodeId\":\"\",\"toNodeId\":\"\",\"relationType\":\"related\"}".to_string(),
+            arguments_json: "{\"fromNodeId\":\"\",\"toNodeId\":\"\",\"relationType\":\"related\"}"
+                .to_string(),
             target_refs: vec![format!("project:{project_id}")],
         }
     } else if task_text.contains("卡片") && task_text.contains("合并") {
@@ -762,8 +804,12 @@ fn to_project_relative_path(project_root: &Path, path: &str) -> String {
 }
 
 fn extract_json_object(text: &str) -> Result<String, String> {
-    let start = text.find('{').ok_or_else(|| "模型未返回 JSON".to_string())?;
-    let end = text.rfind('}').ok_or_else(|| "模型未返回完整 JSON".to_string())?;
+    let start = text
+        .find('{')
+        .ok_or_else(|| "模型未返回 JSON".to_string())?;
+    let end = text
+        .rfind('}')
+        .ok_or_else(|| "模型未返回完整 JSON".to_string())?;
     let candidate = &text[start..=end];
     let _: Value = serde_json::from_str(candidate).map_err(|error| error.to_string())?;
     Ok(candidate.to_string())

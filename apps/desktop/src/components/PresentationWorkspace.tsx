@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { invoke } from "@tauri-apps/api/core";
 import type { Project, StudioArtifact } from "@knowledgeos/shared-types";
 import { getStudioArtifact, listStudioArtifacts } from "../lib/commands/client";
 
@@ -51,6 +52,8 @@ export function PresentationWorkspace({
   const preview = useMemo(() => parsePresentationPreview(artifact), [artifact]);
   const slides = preview?.presentation?.slides ?? [];
   const activeSlide = slides[activeSlideIndex] ?? slides[0] ?? null;
+  const outputPath = artifact?.outputPath ?? null;
+  const isRealPptx = Boolean(outputPath && outputPath.toLowerCase().endsWith(".pptx"));
 
   useEffect(() => {
     setActiveSlideIndex(0);
@@ -61,31 +64,40 @@ export function PresentationWorkspace({
   }
 
   return (
-    <section className="workspace-grid presentation-workspace-grid">
-      <aside className="workspace-sidepanel">
-        <div className="workspace-panel-title">演示结果</div>
-        <div className="workspace-list">
-          {presentationArtifacts.map((item) => (
-            <button
-              key={item.artifactId}
-              className={item.artifactId === artifact?.artifactId ? "workspace-list-row workspace-list-row-active" : "workspace-list-row"}
-              onClick={() => onSelectArtifact(item.artifactId)}
-            >
-              <strong>{item.title}</strong>
-              <span>{item.currentStage ?? "等待查看"}</span>
-            </button>
-          ))}
-          {presentationArtifacts.length === 0 ? <div className="workspace-generic-empty">当前还没有生成演示文稿。</div> : null}
-        </div>
-      </aside>
-
+    <section className="workspace-single-surface presentation-workspace-grid">
       <section className="workspace-editor studio-artifact-editor">
         <div className="editor-header">
           <div>
             <div className="workspace-panel-title">Presentation</div>
             <h2>{artifact?.title ?? "演示文稿工作台"}</h2>
+            {isRealPptx ? <p className="presentation-workspace-hint">当前画面是内容预览，点击右侧按钮可直接打开真实 PPTX 文件。</p> : null}
           </div>
-          {slides.length > 0 ? <div className="document-status-chip">{slides.length} 页</div> : null}
+          <div className="editor-header-actions">
+            {presentationArtifacts.length > 1 ? (
+              <select
+                className="workspace-inline-select"
+                value={artifact?.artifactId ?? ""}
+                onChange={(event) => onSelectArtifact(event.target.value)}
+              >
+                {presentationArtifacts.map((item) => (
+                  <option key={item.artifactId} value={item.artifactId}>
+                    {item.title}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {isRealPptx ? (
+              <button
+                className="small-button presentation-open-button"
+                onClick={async () => {
+                  await invoke("open_path_command", { payload: { path: outputPath } });
+                }}
+              >
+                打开 PPTX
+              </button>
+            ) : null}
+            {slides.length > 0 ? <div className="document-status-chip">{slides.length} 页</div> : null}
+          </div>
         </div>
         {activeSlide ? (
           <div className="presentation-workspace-stage">
@@ -103,23 +115,6 @@ export function PresentationWorkspace({
           <div className="workspace-generic-empty">当前结果还没有可渲染的演示文稿内容。</div>
         )}
       </section>
-
-      <aside className="workspace-preview">
-        <div className="workspace-panel-title">幻灯片目录</div>
-        <div className="workspace-list">
-          {slides.map((slide, index) => (
-            <button
-              key={`${slide.title}-${index}`}
-              className={index === activeSlideIndex ? "workspace-list-row workspace-list-row-active" : "workspace-list-row"}
-              onClick={() => setActiveSlideIndex(index)}
-            >
-              <strong>{slide.title}</strong>
-              <span>第 {index + 1} 页</span>
-            </button>
-          ))}
-          {slides.length === 0 ? <div className="workspace-generic-empty">当前没有幻灯片目录。</div> : null}
-        </div>
-      </aside>
     </section>
   );
 }

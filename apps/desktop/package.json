@@ -1,6 +1,6 @@
 {
   "name": "@knowledgeos/desktop",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,7 +9,12 @@
     "lint": "tsc --project tsconfig.json --noEmit",
     "typecheck": "tsc --project tsconfig.json --noEmit",
     "test": "node --test ./src/**/*.test.ts",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "icons:generate": "tauri icon src-tauri/icons/app-icon.svg -o src-tauri/icons",
+    "release:prepare": "node ./scripts/release-prepare.mjs && pnpm run icons:generate",
+    "release:build": "pnpm run release:prepare && tauri build",
+    "release:test": "node ./scripts/release-verify.mjs",
+    "release:smoke-install": "powershell -ExecutionPolicy Bypass -File ./scripts/release-install-smoke.ps1"
   },
   "dependencies": {
     "@knowledgeos/shared-types": "workspace:*",
@@ -17,10 +22,19 @@
     "@tauri-apps/api": "^2.8.0",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "d3-force": "^3.0.0",
+    "highlight.js": "^11.11.1",
     "markmap-lib": "^0.18.12",
     "markmap-view": "^0.18.12",
+    "pdfjs-dist": "4.10.38",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "react-force-graph-3d": "^1.29.1",
+    "react-markdown": "^10.1.0",
+    "react-pdf-highlighter-extended": "^8.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "three": "^0.183.2",
+    "three-spritetext": "^1.10.0",
     "zod": "^4.1.11",
     "zustand": "^5.0.8"
   },

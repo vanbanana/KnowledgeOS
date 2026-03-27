@@ -259,6 +259,21 @@ export const graphRelationSchema = z.object({
   createdAt: z.string()
 });
 
+export const graphRagHistoryItemSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().min(1)
+});
+
+export const graphRagEvidenceSchema = z.object({
+  evidenceType: z.enum(["node", "card", "block"]),
+  nodeId: z.string().nullable(),
+  cardId: z.string().nullable(),
+  blockId: z.string().nullable(),
+  title: z.string(),
+  snippet: z.string(),
+  sourceLabel: z.string()
+});
+
 export const agentTaskStatusSchema = z.enum([
   "drafted",
   "planned",
@@ -373,6 +388,7 @@ export const relationSuggestionSchema = z.object({
 
 export const studioArtifactKindSchema = z.enum([
   "knowledge_graph",
+  "knowledge_graph_3d",
   "practice_set",
   "mind_map",
   "presentation"
@@ -489,6 +505,22 @@ export const getSubgraphOutputSchema = z.object({
     nodes: z.array(graphNodeSchema),
     relations: z.array(graphRelationSchema)
   })
+});
+
+export const graphRagQueryInputSchema = z.object({
+  projectId: z.string().min(1),
+  query: z.string().min(1),
+  focusNodeId: z.string().min(1).optional(),
+  history: z.array(graphRagHistoryItemSchema).default([])
+});
+
+export const graphRagQueryOutputSchema = z.object({
+  answer: z.string(),
+  model: z.string(),
+  provider: z.string(),
+  relatedNodes: z.array(graphNodeSchema),
+  relatedRelations: z.array(graphRelationSchema),
+  evidence: z.array(graphRagEvidenceSchema)
 });
 
 export const suggestRelationsInputSchema = z.object({
@@ -784,6 +816,7 @@ export const commandNameSchema = z.enum([
   "search.query",
   "search.hybrid",
   "graph.subgraph",
+  "graph.ragQuery",
   "graph.suggestRelations",
   "graph.relation.upsert",
   "graph.relation.confirm",
@@ -869,6 +902,8 @@ export type SearchOutput = z.infer<typeof searchOutputSchema>;
 export type SearchResult = z.infer<typeof searchResultSchema>;
 export type GraphNode = z.infer<typeof graphNodeSchema>;
 export type GraphRelation = z.infer<typeof graphRelationSchema>;
+export type GraphRagHistoryItem = z.infer<typeof graphRagHistoryItemSchema>;
+export type GraphRagEvidence = z.infer<typeof graphRagEvidenceSchema>;
 export type AgentTaskStatus = z.infer<typeof agentTaskStatusSchema>;
 export type AgentToolName = z.infer<typeof agentToolNameSchema>;
 export type AgentPlanStep = z.infer<typeof agentPlanStepSchema>;
@@ -901,6 +936,8 @@ export type ListAgentTaskLogsOutput = z.infer<typeof listAgentTaskLogsOutputSche
 export type GetAgentAuditOutput = z.infer<typeof getAgentAuditOutputSchema>;
 export type GetSubgraphInput = z.infer<typeof getSubgraphInputSchema>;
 export type GetSubgraphOutput = z.infer<typeof getSubgraphOutputSchema>;
+export type GraphRagQueryInput = z.infer<typeof graphRagQueryInputSchema>;
+export type GraphRagQueryOutput = z.infer<typeof graphRagQueryOutputSchema>;
 export type SuggestRelationsInput = z.infer<typeof suggestRelationsInputSchema>;
 export type SuggestRelationsOutput = z.infer<typeof suggestRelationsOutputSchema>;
 export type UpsertRelationInput = z.infer<typeof upsertRelationInputSchema>;
@@ -1012,6 +1049,10 @@ export const commandSchemas = {
   "graph.subgraph": {
     input: getSubgraphInputSchema,
     output: getSubgraphOutputSchema
+  },
+  "graph.ragQuery": {
+    input: graphRagQueryInputSchema,
+    output: graphRagQueryOutputSchema
   },
   "graph.suggestRelations": {
     input: suggestRelationsInputSchema,

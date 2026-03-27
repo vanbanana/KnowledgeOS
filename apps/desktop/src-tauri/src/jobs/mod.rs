@@ -8,7 +8,9 @@ use uuid::Uuid;
 use crate::config::AppConfig;
 use crate::services::chunk::chunk_document;
 use crate::services::import::{DocumentStatus, get_document, transition_document_status};
-use crate::services::normalize::{refine_normalized_result, write_normalized_result};
+use crate::services::normalize::{
+    refine_normalized_result, should_skip_ai_cleanup, write_normalized_result,
+};
 use crate::sidecar::parse_document;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,7 +231,12 @@ fn execute_document_parse_job(
             None,
         )?;
     }
-    let normalized = match parse_document(config, &payload.source_path, &document.source_type) {
+    let normalized = match parse_document(
+        config,
+        &payload.source_path,
+        &document.source_type,
+        &payload.document_id,
+    ) {
         Ok(value) => value,
         Err(error) => {
             let _ = transition_document_status(
@@ -242,7 +249,9 @@ fn execute_document_parse_job(
             return Err(error);
         }
     };
-    let refined_from = if config.model_settings.provider == "mock" {
+    let skip_ai_cleanup = config.model_settings.provider == "mock"
+        || should_skip_ai_cleanup(&document.source_type, &normalized.markdown);
+    let refined_from = if skip_ai_cleanup {
         DocumentStatus::Parsing
     } else {
         transition_document_status(
@@ -448,13 +457,22 @@ mod tests {
             .join("workers")
             .join("parser")
             .join("main.py");
+        let prompt_templates_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("packages")
+            .join("prompt-templates");
         let config = AppConfig {
-            app_name: "KnowledgeOS".to_string(),
+            app_name: "KnowFlow".to_string(),
             workspace_root: temp_root.clone(),
+            runtime_root: temp_root.clone(),
             data_dir: data_dir.clone(),
             log_dir: log_dir.clone(),
             projects_dir: projects_dir.clone(),
             database_path: database_path.clone(),
+            migrations_dir: migrations_dir.clone(),
+            prompt_templates_dir,
             parser_worker_path,
             model_settings: ModelSettings {
                 provider: "mock".to_string(),

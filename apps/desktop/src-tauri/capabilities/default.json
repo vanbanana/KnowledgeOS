@@ -3,6 +3,5 @@
   "identifier": "default",
   "description": "默认桌面能力",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "dialog:allow-open"]
 }
-

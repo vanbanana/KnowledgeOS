@@ -1,19 +1,20 @@
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::collections::BTreeMap;
 
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
 use crate::ai::model_adapter::{ModelAdapter, ModelRequest};
-use crate::config::ModelSettings;
+use crate::config::AppConfig;
 use crate::fs::{ensure_directory, slugify_project_name};
 use crate::services::block::list_blocks;
 use crate::services::import::{DocumentRecord, get_document, list_documents};
 use crate::services::project::get_project;
+use crate::sidecar::generate_presentation_pptx;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -41,6 +42,41 @@ pub struct CreateStudioArtifactInput {
     pub source_document_ids: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PresentationDeck {
+    title: String,
+    subtitle: String,
+    slides: Vec<PresentationSlide>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PresentationSlide {
+    title: String,
+    bullets: Vec<String>,
+    notes: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PresentationOutline {
+    theme: String,
+    audience: String,
+    tone: String,
+    narrative: String,
+    slides: Vec<PresentationOutlineSlide>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PresentationOutlineSlide {
+    title: String,
+    objective: String,
+    key_points: Vec<String>,
+    visual_direction: String,
+}
+
 pub fn create_studio_artifact(
     connection: &Connection,
     input: CreateStudioArtifactInput,
@@ -54,7 +90,9 @@ pub fn create_studio_artifact(
         .ok_or_else(|| "项目不存在".to_string())?;
     let now = Utc::now().to_rfc3339();
     let artifact_id = Uuid::new_v4().to_string();
-    let title = input.title.unwrap_or_else(|| build_default_title(&input.kind));
+    let title = input
+        .title
+        .unwrap_or_else(|| build_default_title(&input.kind));
     let source_document_ids_json =
         serde_json::to_string(&input.source_document_ids).map_err(|error| error.to_string())?;
 
@@ -121,7 +159,7 @@ pub fn get_studio_artifact(
 
 pub fn generate_studio_artifact(
     connection: &Connection,
-    settings: &ModelSettings,
+    config: &AppConfig,
     artifact_id: &str,
     model_adapter: &dyn ModelAdapter,
 ) -> Result<StudioArtifactRecord, String> {
@@ -130,43 +168,139 @@ pub fn generate_studio_artifact(
     let project = get_project(connection, &artifact.project_id)
         .map_err(|error| error.to_string())?
         .ok_or_else(|| "项目不存在".to_string())?;
-    let source_document_ids: Vec<String> =
-        serde_json::from_str(&artifact.source_document_ids_json).map_err(|error| error.to_string())?;
+    let source_document_ids: Vec<String> = serde_json::from_str(&artifact.source_document_ids_json)
+        .map_err(|error| error.to_string())?;
 
-    update_artifact_progress(connection, artifact_id, "preparing", 8, "正在整理资料来源", None, None)?;
-    let source_documents = load_source_documents(connection, &project.project_id, &source_document_ids)?;
+    update_artifact_progress(
+        connection,
+        artifact_id,
+        "preparing",
+        8,
+        "正在整理资料来源",
+        None,
+        None,
+    )?;
+    let source_documents =
+        load_source_documents(connection, &project.project_id, &source_document_ids)?;
     let source_bundle = build_source_bundle(connection, &source_documents)?;
 
-    update_artifact_progress(connection, artifact_id, "preparing", 24, "正在分析资料结构", None, None)?;
-    let system_prompt = load_studio_prompt(&artifact.kind)?;
-    let prompt = build_generation_prompt(&artifact.kind, &artifact.title, &source_documents, &source_bundle);
+    let (output_path, preview_json) = if artifact.kind == "presentation" {
+        update_artifact_progress(
+            connection,
+            artifact_id,
+            "preparing",
+            24,
+            "正在规划演示主题",
+            None,
+            None,
+        )?;
+        let outline = generate_presentation_outline(
+            config,
+            model_adapter,
+            artifact_id,
+            &artifact.project_id,
+            &artifact.title,
+            &source_documents,
+            &source_bundle,
+        )?;
 
-    update_artifact_progress(connection, artifact_id, "generating", 58, "正在生成内容草稿", None, None)?;
-    let response = model_adapter.complete(&ModelRequest {
-        task_type: format!("studio.generate.{}", artifact.kind),
-        provider: settings.provider.clone(),
-        model: settings.default_model.clone(),
-        system_prompt,
-        prompt,
-        output_format: "text".to_string(),
-        context_blocks: source_bundle
-            .split("\n\n")
-            .take(8)
-            .map(ToOwned::to_owned)
-            .collect(),
-        metadata_json: json!({
-            "artifactId": artifact_id,
-            "kind": artifact.kind,
-            "projectId": artifact.project_id
-        })
-        .to_string(),
-        temperature: 0.2,
-        max_output_tokens: 2200,
-    })?;
+        update_artifact_progress(
+            connection,
+            artifact_id,
+            "generating",
+            64,
+            "正在生成幻灯片内容",
+            None,
+            None,
+        )?;
+        let deck = generate_presentation_deck(
+            config,
+            model_adapter,
+            artifact_id,
+            &artifact.project_id,
+            &artifact.title,
+            &source_documents,
+            &source_bundle,
+            &outline,
+        )?;
 
-    update_artifact_progress(connection, artifact_id, "materializing", 82, "正在写入生成结果", None, None)?;
-    let output_path = write_artifact_output(&project.root_path, &artifact.kind, &artifact.title, &response.output_text)?;
-    let preview_json = build_preview_json(&artifact.kind, &response.output_text)?;
+        update_artifact_progress(
+            connection,
+            artifact_id,
+            "materializing",
+            86,
+            "正在生成 PPTX 文件",
+            None,
+            None,
+        )?;
+        materialize_presentation_artifact(config, &project.root_path, &artifact.title, &deck)?
+    } else {
+        update_artifact_progress(
+            connection,
+            artifact_id,
+            "preparing",
+            24,
+            "正在分析资料结构",
+            None,
+            None,
+        )?;
+        let system_prompt = load_studio_prompt(config, &artifact.kind)?;
+        let prompt = build_generation_prompt(
+            &artifact.kind,
+            &artifact.title,
+            &source_documents,
+            &source_bundle,
+        );
+
+        update_artifact_progress(
+            connection,
+            artifact_id,
+            "generating",
+            58,
+            "正在生成内容草稿",
+            None,
+            None,
+        )?;
+        let response = model_adapter.complete(&ModelRequest {
+            task_type: format!("studio.generate.{}", artifact.kind),
+            provider: config.model_settings.provider.clone(),
+            model: config.model_settings.default_model.clone(),
+            system_prompt,
+            prompt,
+            output_format: "text".to_string(),
+            context_blocks: source_bundle
+                .split("\n\n")
+                .take(8)
+                .map(ToOwned::to_owned)
+                .collect(),
+            metadata_json: json!({
+                "artifactId": artifact_id,
+                "kind": artifact.kind,
+                "projectId": artifact.project_id
+            })
+            .to_string(),
+            temperature: 0.2,
+            max_output_tokens: 2200,
+        })?;
+
+        update_artifact_progress(
+            connection,
+            artifact_id,
+            "materializing",
+            82,
+            "正在写入生成结果",
+            None,
+            None,
+        )?;
+        let output_path = write_artifact_output(
+            &project.root_path,
+            &artifact.kind,
+            &artifact.title,
+            &response.output_text,
+        )?;
+        let preview_json = build_preview_json(&artifact.kind, &response.output_text)?;
+        (output_path, preview_json)
+    };
 
     update_artifact_progress(
         connection,
@@ -238,7 +372,8 @@ fn load_source_documents(
     project_id: &str,
     source_document_ids: &[String],
 ) -> Result<Vec<DocumentRecord>, String> {
-    let existing_documents = list_documents(connection, project_id).map_err(|error| error.to_string())?;
+    let existing_documents =
+        list_documents(connection, project_id).map_err(|error| error.to_string())?;
     let mut documents = Vec::new();
     for document_id in source_document_ids {
         let document = existing_documents
@@ -261,14 +396,20 @@ fn build_source_bundle(
         let content = read_document_material(connection, document)?;
         sections.push(format!(
             "# 资料：{}\n\n{}",
-            document.title.clone().unwrap_or_else(|| fallback_document_name(document)),
+            document
+                .title
+                .clone()
+                .unwrap_or_else(|| fallback_document_name(document)),
             trim_for_model(&content)
         ));
     }
     Ok(sections.join("\n\n---\n\n"))
 }
 
-fn read_document_material(connection: &Connection, document: &DocumentRecord) -> Result<String, String> {
+fn read_document_material(
+    connection: &Connection,
+    document: &DocumentRecord,
+) -> Result<String, String> {
     if let Some(path) = document.normalized_md_path.as_deref() {
         let normalized_path = normalize_path(path);
         if normalized_path.exists() {
@@ -283,7 +424,8 @@ fn read_document_material(connection: &Connection, document: &DocumentRecord) ->
         }
     }
 
-    let blocks = list_blocks(connection, &document.document_id).map_err(|error| error.to_string())?;
+    let blocks =
+        list_blocks(connection, &document.document_id).map_err(|error| error.to_string())?;
     if !blocks.is_empty() {
         let merged = blocks
             .into_iter()
@@ -295,7 +437,10 @@ fn read_document_material(connection: &Connection, document: &DocumentRecord) ->
 
     Err(format!(
         "资料 {} 当前还没有可用于生成的内容",
-        document.title.clone().unwrap_or_else(|| fallback_document_name(document))
+        document
+            .title
+            .clone()
+            .unwrap_or_else(|| fallback_document_name(document))
     ))
 }
 
@@ -307,7 +452,12 @@ fn build_generation_prompt(
 ) -> String {
     let source_titles = source_documents
         .iter()
-        .map(|document| document.title.clone().unwrap_or_else(|| fallback_document_name(document)))
+        .map(|document| {
+            document
+                .title
+                .clone()
+                .unwrap_or_else(|| fallback_document_name(document))
+        })
         .collect::<Vec<_>>()
         .join("、");
 
@@ -317,26 +467,346 @@ fn build_generation_prompt(
     )
 }
 
+fn generate_presentation_outline(
+    config: &AppConfig,
+    model_adapter: &dyn ModelAdapter,
+    artifact_id: &str,
+    project_id: &str,
+    title: &str,
+    source_documents: &[DocumentRecord],
+    source_bundle: &str,
+) -> Result<PresentationOutline, String> {
+    let system_prompt =
+        load_studio_prompt_by_file(config, "studio_presentation_outline_system.md")?;
+    let prompt = build_presentation_outline_prompt(title, source_documents, source_bundle);
+    let response = model_adapter.complete(&ModelRequest {
+        task_type: "studio.generate.presentation.outline".to_string(),
+        provider: config.model_settings.provider.clone(),
+        model: config.model_settings.default_model.clone(),
+        system_prompt,
+        prompt,
+        output_format: "text".to_string(),
+        context_blocks: source_bundle
+            .split("\n\n")
+            .take(10)
+            .map(ToOwned::to_owned)
+            .collect(),
+        metadata_json: json!({
+            "artifactId": artifact_id,
+            "kind": "presentation_outline",
+            "projectId": project_id
+        })
+        .to_string(),
+        temperature: 0.15,
+        max_output_tokens: 1800,
+    })?;
+    parse_presentation_outline(title, &response.output_text)
+}
+
+fn generate_presentation_deck(
+    config: &AppConfig,
+    model_adapter: &dyn ModelAdapter,
+    artifact_id: &str,
+    project_id: &str,
+    title: &str,
+    source_documents: &[DocumentRecord],
+    source_bundle: &str,
+    outline: &PresentationOutline,
+) -> Result<PresentationDeck, String> {
+    let system_prompt = load_studio_prompt(config, "presentation")?;
+    let prompt = build_presentation_deck_prompt(title, source_documents, source_bundle, outline)?;
+    let response = model_adapter.complete(&ModelRequest {
+        task_type: "studio.generate.presentation.deck".to_string(),
+        provider: config.model_settings.provider.clone(),
+        model: config.model_settings.default_model.clone(),
+        system_prompt,
+        prompt,
+        output_format: "text".to_string(),
+        context_blocks: source_bundle
+            .split("\n\n")
+            .take(10)
+            .map(ToOwned::to_owned)
+            .collect(),
+        metadata_json: json!({
+            "artifactId": artifact_id,
+            "kind": "presentation",
+            "projectId": project_id,
+            "theme": outline.theme
+        })
+        .to_string(),
+        temperature: 0.2,
+        max_output_tokens: 2800,
+    })?;
+    parse_presentation_deck(title, &response.output_text)
+}
+
+fn build_presentation_outline_prompt(
+    title: &str,
+    source_documents: &[DocumentRecord],
+    source_bundle: &str,
+) -> String {
+    let source_titles = source_documents
+        .iter()
+        .map(|document| {
+            document
+                .title
+                .clone()
+                .unwrap_or_else(|| fallback_document_name(document))
+        })
+        .collect::<Vec<_>>()
+        .join("、");
+
+    format!(
+        "当前任务：为一份正式演示文稿先规划大纲。\n演示标题：{title}\n资料数量：{}\n资料名称：{source_titles}\n\n请先提炼适合 PPT 阅读的主题、受众、叙事主线与分页结构，再输出大纲 JSON。\n\n{source_bundle}",
+        source_documents.len()
+    )
+}
+
+fn build_presentation_deck_prompt(
+    title: &str,
+    source_documents: &[DocumentRecord],
+    source_bundle: &str,
+    outline: &PresentationOutline,
+) -> Result<String, String> {
+    let source_titles = source_documents
+        .iter()
+        .map(|document| {
+            document
+                .title
+                .clone()
+                .unwrap_or_else(|| fallback_document_name(document))
+        })
+        .collect::<Vec<_>>()
+        .join("、");
+    let outline_json = serde_json::to_string_pretty(outline).map_err(|error| error.to_string())?;
+
+    Ok(format!(
+        "当前任务：基于既定演示大纲，生成最终 PPT 页面内容 JSON。\n演示标题：{title}\n资料名称：{source_titles}\n\n先严格遵循下面这份大纲，不要退化成简单标题加文字堆砌。每一页都要有明确阅读重点、适合展示的表达方式，并保持统一主题感。\n\n演示大纲：\n{outline_json}\n\n原始资料：\n{source_bundle}"
+    ))
+}
+
+fn parse_presentation_deck(default_title: &str, raw: &str) -> Result<PresentationDeck, String> {
+    let trimmed = raw.trim();
+    for candidate in presentation_json_candidates(trimmed) {
+        if let Ok(deck) = serde_json::from_str::<PresentationDeck>(&candidate) {
+            return normalize_presentation_deck(default_title, deck);
+        }
+    }
+    Err("演示文稿生成结果不是合法的 JSON 结构".to_string())
+}
+
+fn parse_presentation_outline(
+    default_title: &str,
+    raw: &str,
+) -> Result<PresentationOutline, String> {
+    let trimmed = raw.trim();
+    for candidate in presentation_json_candidates(trimmed) {
+        if let Ok(outline) = serde_json::from_str::<PresentationOutline>(&candidate) {
+            return normalize_presentation_outline(default_title, outline);
+        }
+    }
+    Err("演示文稿大纲结果不是合法的 JSON 结构".to_string())
+}
+
+fn presentation_json_candidates(raw: &str) -> Vec<String> {
+    let mut candidates = Vec::new();
+    if !raw.is_empty() {
+        candidates.push(raw.to_string());
+    }
+
+    if let Some(json_block) = extract_fenced_block(raw, "json") {
+        candidates.push(json_block);
+    }
+
+    if let (Some(start), Some(end)) = (raw.find('{'), raw.rfind('}'))
+        && end > start
+    {
+        candidates.push(raw[start..=end].to_string());
+    }
+
+    candidates
+}
+
+fn extract_fenced_block(raw: &str, language: &str) -> Option<String> {
+    let fence = format!("```{language}");
+    let start = raw.find(&fence)?;
+    let rest = &raw[start + fence.len()..];
+    let end = rest.find("```")?;
+    Some(rest[..end].trim().to_string())
+}
+
+fn normalize_presentation_deck(
+    default_title: &str,
+    deck: PresentationDeck,
+) -> Result<PresentationDeck, String> {
+    let title = if deck.title.trim().is_empty() {
+        default_title.trim().to_string()
+    } else {
+        deck.title.trim().to_string()
+    };
+    let subtitle = deck.subtitle.trim().to_string();
+    let slides = deck
+        .slides
+        .into_iter()
+        .enumerate()
+        .map(|(index, slide)| PresentationSlide {
+            title: if slide.title.trim().is_empty() {
+                format!("第 {} 页", index + 1)
+            } else {
+                slide.title.trim().to_string()
+            },
+            bullets: slide
+                .bullets
+                .into_iter()
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .take(6)
+                .collect(),
+            notes: slide.notes.trim().to_string(),
+        })
+        .collect::<Vec<_>>();
+
+    if slides.is_empty() {
+        return Err("演示文稿至少需要一页幻灯片".to_string());
+    }
+
+    Ok(PresentationDeck {
+        title,
+        subtitle,
+        slides,
+    })
+}
+
+fn normalize_presentation_outline(
+    default_title: &str,
+    outline: PresentationOutline,
+) -> Result<PresentationOutline, String> {
+    let theme = if outline.theme.trim().is_empty() {
+        default_title.trim().to_string()
+    } else {
+        outline.theme.trim().to_string()
+    };
+    let audience = if outline.audience.trim().is_empty() {
+        "通用业务读者".to_string()
+    } else {
+        outline.audience.trim().to_string()
+    };
+    let tone = if outline.tone.trim().is_empty() {
+        "清晰、专业、适合演示".to_string()
+    } else {
+        outline.tone.trim().to_string()
+    };
+    let narrative = if outline.narrative.trim().is_empty() {
+        "从背景到重点，再到总结".to_string()
+    } else {
+        outline.narrative.trim().to_string()
+    };
+    let slides = outline
+        .slides
+        .into_iter()
+        .enumerate()
+        .map(|(index, slide)| PresentationOutlineSlide {
+            title: if slide.title.trim().is_empty() {
+                format!("第 {} 页", index + 1)
+            } else {
+                slide.title.trim().to_string()
+            },
+            objective: if slide.objective.trim().is_empty() {
+                "传达该页核心重点".to_string()
+            } else {
+                slide.objective.trim().to_string()
+            },
+            key_points: slide
+                .key_points
+                .into_iter()
+                .map(|item| item.trim().to_string())
+                .filter(|item| !item.is_empty())
+                .take(5)
+                .collect(),
+            visual_direction: if slide.visual_direction.trim().is_empty() {
+                "重点结论页".to_string()
+            } else {
+                slide.visual_direction.trim().to_string()
+            },
+        })
+        .collect::<Vec<_>>();
+
+    if slides.len() < 5 {
+        return Err("演示文稿大纲页数过少，无法形成完整演示结构".to_string());
+    }
+
+    Ok(PresentationOutline {
+        theme,
+        audience,
+        tone,
+        narrative,
+        slides,
+    })
+}
+
+fn materialize_presentation_artifact(
+    config: &AppConfig,
+    project_root: &str,
+    title: &str,
+    deck: &PresentationDeck,
+) -> Result<(PathBuf, String), String> {
+    let output_path = build_output_path(project_root, "presentation", title, "pptx")?;
+    let presentation_json = serde_json::to_string(deck).map_err(|error| error.to_string())?;
+    generate_presentation_pptx(config, &output_path.to_string_lossy(), &presentation_json)?;
+    let preview_json = build_presentation_preview_json(deck)?;
+    Ok((output_path, preview_json))
+}
+
 fn write_artifact_output(
     project_root: &str,
     kind: &str,
     title: &str,
     content: &str,
 ) -> Result<PathBuf, String> {
-    let root = PathBuf::from(project_root);
-    let directory = root.join("exports").join("studio").join(kind);
-    ensure_directory(&directory).map_err(|error| error.to_string())?;
-    let file_name = format!("{}-{}.md", slugify_project_name(title), &Uuid::new_v4().to_string()[..8]);
-    let output_path = directory.join(file_name);
+    let output_path = build_output_path(project_root, kind, title, "md")?;
     fs::write(&output_path, content).map_err(|error| error.to_string())?;
     Ok(output_path)
 }
 
+fn build_output_path(
+    project_root: &str,
+    kind: &str,
+    title: &str,
+    extension: &str,
+) -> Result<PathBuf, String> {
+    let root = PathBuf::from(project_root);
+    let directory = root.join("exports").join("studio").join(kind);
+    ensure_directory(&directory).map_err(|error| error.to_string())?;
+    let file_name = format!(
+        "{}-{}.{}",
+        slugify_project_name(title),
+        &Uuid::new_v4().to_string()[..8],
+        extension
+    );
+    Ok(directory.join(file_name))
+}
+
 fn build_preview_json(kind: &str, content: &str) -> Result<String, String> {
-    let graph_preview = if kind == "knowledge_graph" { build_graph_preview(content) } else { None };
-    let practice_preview = if kind == "practice_set" { build_practice_preview(content) } else { None };
-    let mind_map_preview = if kind == "mind_map" { build_mind_map_preview(content) } else { None };
-    let presentation_preview = if kind == "presentation" { build_presentation_preview(content) } else { None };
+    let graph_preview = if matches!(kind, "knowledge_graph" | "knowledge_graph_3d") {
+        build_graph_preview(content)
+    } else {
+        None
+    };
+    let practice_preview = if kind == "practice_set" {
+        build_practice_preview(content)
+    } else {
+        None
+    };
+    let mind_map_preview = if kind == "mind_map" {
+        build_mind_map_preview(content)
+    } else {
+        None
+    };
+    let presentation_preview = if kind == "presentation" {
+        build_presentation_preview(content)
+    } else {
+        None
+    };
     let preview = json!({
         "kind": kind,
         "excerpt": content.lines().take(8).collect::<Vec<_>>().join("\n"),
@@ -345,6 +815,26 @@ fn build_preview_json(kind: &str, content: &str) -> Result<String, String> {
         "practiceSet": practice_preview,
         "mindMap": mind_map_preview,
         "presentation": presentation_preview
+    });
+    serde_json::to_string(&preview).map_err(|error| error.to_string())
+}
+
+fn build_presentation_preview_json(deck: &PresentationDeck) -> Result<String, String> {
+    let preview = json!({
+        "kind": "presentation",
+        "excerpt": deck.slides.iter().take(4).map(|slide| slide.title.clone()).collect::<Vec<_>>().join("\n"),
+        "lineCount": deck.slides.len(),
+        "graph": serde_json::Value::Null,
+        "practiceSet": serde_json::Value::Null,
+        "mindMap": serde_json::Value::Null,
+        "presentation": {
+            "slides": deck.slides.iter().map(|slide| {
+                json!({
+                    "title": slide.title,
+                    "lines": slide.bullets
+                })
+            }).collect::<Vec<_>>()
+        }
     });
     serde_json::to_string(&preview).map_err(|error| error.to_string())
 }
@@ -494,7 +984,9 @@ fn build_mind_map_preview(content: &str) -> Option<serde_json::Value> {
     if nodes.is_empty() {
         return None;
     }
-    Some(json!({ "nodes": nodes.into_iter().map(|(depth, label)| json!({ "depth": depth, "label": label })).collect::<Vec<_>>() }))
+    Some(
+        json!({ "nodes": nodes.into_iter().map(|(depth, label)| json!({ "depth": depth, "label": label })).collect::<Vec<_>>() }),
+    )
 }
 
 fn build_presentation_preview(content: &str) -> Option<serde_json::Value> {
@@ -622,7 +1114,8 @@ fn is_invalid_graph_label(label: &str) -> bool {
 
 fn build_default_title(kind: &str) -> String {
     let prefix = match kind {
-        "knowledge_graph" => "知识图谱网络",
+        "knowledge_graph" => "GraphRAG知识图谱",
+        "knowledge_graph_3d" => "3D知识可视化",
         "practice_set" => "练习题草稿",
         "mind_map" => "思维导图",
         "presentation" => "演示文稿",
@@ -639,21 +1132,19 @@ fn fallback_document_name(document: &DocumentRecord) -> String {
         .to_string()
 }
 
-fn load_studio_prompt(kind: &str) -> Result<String, String> {
+fn load_studio_prompt(config: &AppConfig, kind: &str) -> Result<String, String> {
     let file_name = match kind {
-        "knowledge_graph" => "studio_knowledge_graph_system.md",
+        "knowledge_graph" | "knowledge_graph_3d" => "studio_knowledge_graph_system.md",
         "practice_set" => "studio_practice_set_system.md",
         "mind_map" => "studio_mind_map_system.md",
         "presentation" => "studio_presentation_system.md",
         _ => return Err("不支持的 Studio 生成类型".to_string()),
     };
-    let prompt_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("..")
-        .join("packages")
-        .join("prompt-templates")
-        .join(file_name);
+    load_studio_prompt_by_file(config, file_name)
+}
+
+fn load_studio_prompt_by_file(config: &AppConfig, file_name: &str) -> Result<String, String> {
+    let prompt_path = config.prompt_templates_dir.join(file_name);
     fs::read_to_string(prompt_path).map_err(|error| error.to_string())
 }
 
@@ -670,7 +1161,9 @@ fn normalize_path(path: &str) -> PathBuf {
     PathBuf::from(path.trim_start_matches(r"\\?\"))
 }
 
-fn map_studio_artifact_row(row: &rusqlite::Row<'_>) -> Result<StudioArtifactRecord, rusqlite::Error> {
+fn map_studio_artifact_row(
+    row: &rusqlite::Row<'_>,
+) -> Result<StudioArtifactRecord, rusqlite::Error> {
     Ok(StudioArtifactRecord {
         artifact_id: row.get(0)?,
         project_id: row.get(1)?,

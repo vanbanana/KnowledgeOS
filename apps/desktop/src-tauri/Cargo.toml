@@ -1,12 +1,13 @@
 [package]
 name = "knowledgeos-desktop"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 
 [build-dependencies]
 tauri-build = { version = "2.2.0", features = [] }
 
 [dependencies]
+base64 = "0.22.1"
 chrono = { version = "0.4.42", features = ["serde"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rusqlite = { version = "0.37.0", features = ["bundled", "chrono"] }

@@ -92,31 +92,29 @@ export function MindMapWorkspace({
   }
 
   return (
-    <section className="workspace-grid mind-map-workspace-grid">
-      <aside className="workspace-sidepanel">
-        <div className="workspace-panel-title">思维导图结果</div>
-        <div className="workspace-list">
-          {mindMapArtifacts.map((item) => (
-            <button
-              key={item.artifactId}
-              className={item.artifactId === artifact?.artifactId ? "workspace-list-row workspace-list-row-active" : "workspace-list-row"}
-              onClick={() => onSelectArtifact(item.artifactId)}
-            >
-              <strong>{item.title}</strong>
-              <span>{item.currentStage ?? "等待查看"}</span>
-            </button>
-          ))}
-          {mindMapArtifacts.length === 0 ? <div className="workspace-generic-empty">当前还没有生成思维导图。</div> : null}
-        </div>
-      </aside>
-
+    <section className="workspace-single-surface mind-map-workspace-grid">
       <section className="workspace-editor studio-artifact-editor">
         <div className="editor-header">
           <div>
             <div className="workspace-panel-title">Mind Map</div>
             <h2>{artifact?.title ?? "思维导图工作台"}</h2>
           </div>
-          {nodeCount > 0 ? <div className="document-status-chip">{nodeCount} 个节点</div> : null}
+          <div className="editor-header-actions">
+            {mindMapArtifacts.length > 1 ? (
+              <select
+                className="workspace-inline-select"
+                value={artifact?.artifactId ?? ""}
+                onChange={(event) => onSelectArtifact(event.target.value)}
+              >
+                {mindMapArtifacts.map((item) => (
+                  <option key={item.artifactId} value={item.artifactId}>
+                    {item.title}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {nodeCount > 0 ? <div className="document-status-chip">{nodeCount} 个节点</div> : null}
+          </div>
         </div>
         {nodeCount > 0 ? (
           <div className="mind-map-markmap-shell">

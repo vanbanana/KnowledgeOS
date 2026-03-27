@@ -79,9 +79,9 @@ interface StudioPreviewPayload {
 const STUDIO_TILES: StudioTileDefinition[] = [
   {
     kind: "knowledge_graph",
-    title: "知识图谱网络",
-    subtitle: "结构关系",
-    description: "基于多份资料生成 Mermaid 知识网络图谱。",
+    title: "GraphRAG知识图谱",
+    subtitle: "图谱问答",
+    description: "基于现有知识卡片和关系网络，进入可问答的 GraphRAG 图谱页。",
     toneClassName: "studio-tile-graph"
   },
   {
@@ -101,8 +101,8 @@ const STUDIO_TILES: StudioTileDefinition[] = [
   {
     kind: "presentation",
     title: "演示文稿",
-    subtitle: "Marp 草稿",
-    description: "生成可继续编辑的 Marp 幻灯片 Markdown。",
+    subtitle: "PPTX 文件",
+    description: "直接生成可打开使用的 PPTX 演示文稿文件。",
     toneClassName: "studio-tile-presentation"
   }
 ];
@@ -263,7 +263,7 @@ export function StudioWorkspace({
               onClick={() => setSelectedArtifactId(artifact.artifactId)}
             >
               <div className="studio-artifact-card-head">
-                <strong>{artifact.title}</strong>
+                <strong>{getArtifactDisplayTitle(artifact)}</strong>
                 <span className={`studio-status-chip studio-status-${artifact.status}`}>{mapStatusLabel(artifact.status)}</span>
               </div>
               <div className="studio-artifact-card-meta">
@@ -325,7 +325,7 @@ function StudioArtifactDetail({
   return (
     <div className="studio-detail-card">
       <div className="studio-detail-head">
-        <strong>{artifact.title}</strong>
+        <strong>{getArtifactDisplayTitle(artifact)}</strong>
         <span className={`studio-status-chip studio-status-${artifact.status}`}>{mapStatusLabel(artifact.status)}</span>
       </div>
       <div className="studio-detail-kind">{mapKindLabel(artifact.kind)}</div>
@@ -354,7 +354,7 @@ function StudioArtifactDetail({
       <div className="studio-detail-actions">
         {artifact.kind === "knowledge_graph" ? (
           <button className="small-button studio-open-graph-button" onClick={() => onOpenKnowledgeGraph(artifact.artifactId)}>
-            打开知识网络工作台
+                  打开 GraphRAG 图谱页
           </button>
         ) : null}
         {artifact.kind === "practice_set" ? (
@@ -584,8 +584,8 @@ function StudioKnowledgeGraphPreview({ graph }: { graph: NonNullable<StudioPrevi
           {graph.nodes.length} 个节点 · {graph.links.length} 条连接
         </span>
       </div>
-      <div ref={hostRef} className="studio-graph-preview">
-        <svg viewBox={`0 0 ${size.width} ${size.height}`} className="studio-graph-svg" aria-label="知识图谱网络预览">
+        <div ref={hostRef} className="studio-graph-preview">
+          <svg viewBox={`0 0 ${size.width} ${size.height}`} className="studio-graph-svg" aria-label="GraphRAG知识图谱预览">
           <defs>
             <linearGradient id={`studio-graph-flow-${graph.nodes.length}-${graph.links.length}`} x1="0%" y1="0%" x2="100%" y2="0%">
               <stop offset="0%" stopColor="rgba(255,255,255,0)" />
@@ -651,7 +651,7 @@ function getDocumentDisplayName(document: Document) {
 function mapKindLabel(kind: StudioArtifactKind) {
   switch (kind) {
     case "knowledge_graph":
-      return "知识图谱网络";
+      return "GraphRAG知识图谱";
     case "practice_set":
       return "练习题";
     case "mind_map":
@@ -680,6 +680,16 @@ function mapStatusLabel(status: StudioArtifact["status"]) {
     default:
       return status;
   }
+}
+
+function getArtifactDisplayTitle(artifact: StudioArtifact) {
+  if (artifact.kind === "knowledge_graph") {
+    return artifact.title.replace(/^知识图谱网络/, "GraphRAG知识图谱");
+  }
+  if (artifact.kind === "knowledge_graph_3d") {
+    return artifact.title.replace(/^3D 知识星图/, "3D知识可视化");
+  }
+  return artifact.title;
 }
 
 function toRelativeOutputPath(outputPath: string) {

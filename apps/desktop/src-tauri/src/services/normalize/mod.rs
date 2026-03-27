@@ -68,10 +68,10 @@ pub fn read_normalized_result(
         .clone()
         .ok_or_else(|| "文档缺少 manifest 路径".to_string())?;
 
-    let markdown =
-        fs::read_to_string(normalize_filesystem_path(&markdown_path)).map_err(|error| error.to_string())?;
-    let manifest_json =
-        fs::read_to_string(normalize_filesystem_path(&manifest_path)).map_err(|error| error.to_string())?;
+    let markdown = fs::read_to_string(normalize_filesystem_path(&markdown_path))
+        .map_err(|error| error.to_string())?;
+    let manifest_json = fs::read_to_string(normalize_filesystem_path(&manifest_path))
+        .map_err(|error| error.to_string())?;
     let manifest = serde_json::from_str::<NormalizedManifest>(&manifest_json)
         .map_err(|error| error.to_string())?;
 
@@ -94,13 +94,12 @@ pub fn refine_normalized_result(
     if config.model_settings.provider == "mock" {
         return Ok(result);
     }
+    if should_skip_ai_cleanup(source_type, &result.markdown) {
+        return Ok(result);
+    }
 
-    let prompt_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("..")
-        .join("packages")
-        .join("prompt-templates")
+    let prompt_path = config
+        .prompt_templates_dir
         .join("import_markdown_cleanup_system.md");
     let system_prompt = fs::read_to_string(prompt_path).map_err(|error| error.to_string())?;
 
@@ -173,6 +172,20 @@ pub fn refine_normalized_result(
             },
         },
     })
+}
+
+pub fn should_skip_ai_cleanup(source_type: &str, markdown: &str) -> bool {
+    let source = source_type.to_ascii_lowercase();
+    let chars = markdown.chars().count();
+    let lines = markdown.lines().count();
+
+    if source == "pdf" {
+        return true;
+    }
+    if chars > 280_000 {
+        return true;
+    }
+    lines > 9000
 }
 
 fn slugify_anchor(value: &str) -> String {

@@ -8,6 +8,8 @@ import type {
   ChatWithBlockOutput,
   ExplainBlockInput,
   ExplainBlockOutput,
+  GraphRagQueryInput,
+  GraphRagQueryOutput,
   GetSourcePreviewInput,
   GetSourcePreviewOutput,
   GetSubgraphInput,
@@ -168,6 +170,10 @@ export async function hybridSearchProject(input: SearchInput): Promise<SearchOut
 
 export async function getSubgraph(input: GetSubgraphInput): Promise<GetSubgraphOutput> {
   return invokeTyped(desktopCommandSchemas.graphSubgraph, input);
+}
+
+export async function graphRagQuery(input: GraphRagQueryInput): Promise<GraphRagQueryOutput> {
+  return invokeTyped(desktopCommandSchemas.graphRagQuery, input);
 }
 
 export async function suggestRelations(input: SuggestRelationsInput): Promise<SuggestRelationsOutput> {

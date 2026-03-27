@@ -67,8 +67,7 @@ pub async fn explain_block_command(
     let mode = payload.mode.unwrap_or_else(|| "default".to_string());
     let explanation = tauri::async_runtime::spawn_blocking(move || {
         let adapter = build_model_adapter(&config.model_settings)?;
-        let migrations_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations");
-        let connection = initialize_database(&config.database_path, &migrations_dir)
+        let connection = initialize_database(&config.database_path, &config.migrations_dir)
             .map_err(|error| error.to_string())?;
         explain_block(
             &connection,
@@ -97,8 +96,7 @@ pub async fn regenerate_block_explanation_command(
     let mode = payload.mode.unwrap_or_else(|| "default".to_string());
     let explanation = tauri::async_runtime::spawn_blocking(move || {
         let adapter = build_model_adapter(&config.model_settings)?;
-        let migrations_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations");
-        let connection = initialize_database(&config.database_path, &migrations_dir)
+        let connection = initialize_database(&config.database_path, &config.migrations_dir)
             .map_err(|error| error.to_string())?;
         regenerate_block_explanation(
             &connection,

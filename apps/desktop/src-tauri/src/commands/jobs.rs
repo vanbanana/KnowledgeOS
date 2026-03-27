@@ -83,8 +83,7 @@ pub async fn run_job_command(
     };
     let job_id = payload.job_id.clone();
     let job = tauri::async_runtime::spawn_blocking(move || {
-        let migrations_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations");
-        let connection = initialize_database(&config.database_path, &migrations_dir)
+        let connection = initialize_database(&config.database_path, &config.migrations_dir)
             .map_err(|error| error.to_string())?;
         run_job(&connection, &config, &job_id)
     })

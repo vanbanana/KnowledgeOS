@@ -69,31 +69,29 @@ export function PracticeSetWorkspace({
   }
 
   return (
-    <section className="workspace-grid practice-workspace-grid">
-      <aside className="workspace-sidepanel">
-        <div className="workspace-panel-title">练习题结果</div>
-        <div className="workspace-list">
-          {practiceArtifacts.map((item) => (
-            <button
-              key={item.artifactId}
-              className={item.artifactId === artifact?.artifactId ? "workspace-list-row workspace-list-row-active" : "workspace-list-row"}
-              onClick={() => onSelectArtifact(item.artifactId)}
-            >
-              <strong>{item.title}</strong>
-              <span>{item.currentStage ?? "等待查看"}</span>
-            </button>
-          ))}
-          {practiceArtifacts.length === 0 ? <div className="workspace-generic-empty">当前还没有生成练习题。</div> : null}
-        </div>
-      </aside>
-
+    <section className="workspace-single-surface practice-workspace-grid">
       <section className="workspace-editor studio-artifact-editor">
         <div className="editor-header">
           <div>
             <div className="workspace-panel-title">Practice Set</div>
             <h2>{artifact?.title ?? "练习题工作台"}</h2>
           </div>
-          {items.length > 0 ? <div className="document-status-chip">{items.length} 题</div> : null}
+          <div className="editor-header-actions">
+            {practiceArtifacts.length > 1 ? (
+              <select
+                className="workspace-inline-select"
+                value={artifact?.artifactId ?? ""}
+                onChange={(event) => onSelectArtifact(event.target.value)}
+              >
+                {practiceArtifacts.map((item) => (
+                  <option key={item.artifactId} value={item.artifactId}>
+                    {item.title}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            {items.length > 0 ? <div className="document-status-chip">{items.length} 题</div> : null}
+          </div>
         </div>
         {items.length > 0 ? (
           <div className="practice-workspace-list">

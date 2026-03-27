@@ -138,11 +138,12 @@ impl DeepSeekModelAdapter {
 impl ModelAdapter for DeepSeekModelAdapter {
     fn complete(&self, request: &ModelRequest) -> Result<ModelResponse, String> {
         let started_at = Instant::now();
-        let model_name = if request.task_type.contains("tool") || request.task_type.contains("agent") {
-            self.settings.tool_model.clone()
-        } else {
-            self.settings.default_model.clone()
-        };
+        let model_name =
+            if request.task_type.contains("tool") || request.task_type.contains("agent") {
+                self.settings.tool_model.clone()
+            } else {
+                self.settings.default_model.clone()
+            };
         let payload = if request.output_format == "json" {
             serde_json::json!({
                 "model": model_name,

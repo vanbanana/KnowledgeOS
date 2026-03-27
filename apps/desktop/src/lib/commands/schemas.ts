@@ -17,6 +17,8 @@ import {
   getAgentAuditOutputSchema,
   getSourcePreviewInputSchema,
   getSourcePreviewOutputSchema,
+  graphRagQueryInputSchema,
+  graphRagQueryOutputSchema,
   getSubgraphInputSchema,
   getSubgraphOutputSchema,
   listBlocksOutputSchema,
@@ -217,6 +219,11 @@ export const desktopCommandSchemas = {
     command: "get_subgraph_command",
     input: getSubgraphInputSchema,
     output: getSubgraphOutputSchema
+  },
+  graphRagQuery: {
+    command: "graph_rag_query_command",
+    input: graphRagQueryInputSchema,
+    output: graphRagQueryOutputSchema
   },
   graphSuggestRelations: {
     command: "suggest_relations_command",

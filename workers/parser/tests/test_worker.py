@@ -102,6 +102,42 @@ def test_parse_pptx(tmp_path: Path) -> None:
     assert "第一页" in payload["markdown"]
 
 
+def test_generate_pptx(tmp_path: Path) -> None:
+    output = tmp_path / "generated.pptx"
+    payload = {
+        "title": "测试演示文稿",
+        "subtitle": "副标题",
+        "slides": [
+            {"title": "测试演示文稿", "bullets": []},
+            {"title": "核心结论", "bullets": ["要点一", "要点二", "要点三"]},
+        ],
+    }
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(WORKER),
+            "generate_pptx",
+            "--output-path",
+            str(output),
+            "--presentation-json",
+            json.dumps(payload, ensure_ascii=False),
+        ],
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+    result = json.loads(completed.stdout)
+    assert result["ok"] is True
+    assert result["slideCount"] == 2
+    assert output.exists()
+
+    presentation = Presentation(output)
+    assert len(presentation.slides) == 2
+    first_slide_text = "\n".join(shape.text for shape in presentation.slides[0].shapes if hasattr(shape, "text"))
+    assert "测试演示文稿" in first_slide_text
+
+
 def test_parse_pdf(tmp_path: Path) -> None:
     source = tmp_path / "sample.pdf"
     writer = PdfWriter()

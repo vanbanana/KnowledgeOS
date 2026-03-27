@@ -178,7 +178,8 @@ pub fn save_agent_plan(
     task_id: &str,
     plan: &AgentPlan,
 ) -> Result<AgentTaskRecord, String> {
-    let current = get_agent_task(connection, task_id)?.ok_or_else(|| "Agent 任务不存在".to_string())?;
+    let current =
+        get_agent_task(connection, task_id)?.ok_or_else(|| "Agent 任务不存在".to_string())?;
     if !is_valid_transition(&current.status, AGENT_STATUS_PLANNED) {
         return Err("当前任务状态不能写入 plan".to_string());
     }
@@ -229,9 +230,13 @@ pub fn transition_agent_task_status(
     task_id: &str,
     next_status: &str,
 ) -> Result<AgentTaskRecord, String> {
-    let current = get_agent_task(connection, task_id)?.ok_or_else(|| "Agent 任务不存在".to_string())?;
+    let current =
+        get_agent_task(connection, task_id)?.ok_or_else(|| "Agent 任务不存在".to_string())?;
     if current.status != next_status && !is_valid_transition(&current.status, next_status) {
-        return Err(format!("不允许从 {} 变更到 {}", current.status, next_status));
+        return Err(format!(
+            "不允许从 {} 变更到 {}",
+            current.status, next_status
+        ));
     }
     let now = Utc::now().to_rfc3339();
     connection
@@ -310,8 +315,12 @@ pub fn list_task_logs(
 }
 
 pub fn parse_agent_plan(task: &AgentTaskRecord) -> Result<AgentPlan, String> {
-    serde_json::from_str(task.plan_json.as_deref().ok_or_else(|| "当前任务还没有 plan".to_string())?)
-        .map_err(|error| error.to_string())
+    serde_json::from_str(
+        task.plan_json
+            .as_deref()
+            .ok_or_else(|| "当前任务还没有 plan".to_string())?,
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn map_agent_task_row(row: &rusqlite::Row<'_>) -> Result<AgentTaskRecord, rusqlite::Error> {

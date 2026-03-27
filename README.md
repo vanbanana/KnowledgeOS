@@ -1,6 +1,6 @@
-# KnowledgeOS
+# KnowFlow
 
-KnowledgeOS 是一个基于 Tauri、React、TypeScript、Rust、SQLite 与 Python parser worker 的本地优先知识工作台。
+KnowFlow 是一个基于 Tauri、React、TypeScript、Rust、SQLite 与 Python parser worker 的本地优先知识工作台。
 
 ## 当前阶段
 
@@ -33,6 +33,9 @@ docs/tasks              任务拆解文档目录
 pnpm install
 pnpm dev
 pnpm tauri:dev
+pnpm release:desktop
+pnpm release:test:desktop
+pnpm release:smoke-install:desktop
 pnpm lint
 pnpm typecheck
 pnpm test
@@ -43,4 +46,3 @@ pnpm test
 - 当前不使用 Electron。
 - Rust 侧优先采用 `rusqlite`，目标是简单稳定。
 - Python worker 目前只提供健康检查与 mock 解析响应，后续承接 `TASK-022 ~ TASK-028`。
-

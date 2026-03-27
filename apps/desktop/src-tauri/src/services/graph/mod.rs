@@ -1,8 +1,10 @@
 pub mod query;
+pub mod rag;
 pub mod suggest;
 
 use chrono::Utc;
 use rusqlite::{Connection, OptionalExtension, params};
+use serde::Deserialize;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -53,6 +55,30 @@ pub struct UpsertRelationInput<'a> {
     pub origin_type: &'a str,
     pub source_ref: Option<&'a str>,
     pub confirmed_by_user: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct StudioPreviewPayload {
+    graph: Option<StudioPreviewGraph>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StudioPreviewGraph {
+    nodes: Vec<StudioPreviewNode>,
+    links: Vec<StudioPreviewLink>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StudioPreviewNode {
+    id: String,
+    label: String,
+    weight: Option<usize>,
+}
+
+#[derive(Debug, Deserialize)]
+struct StudioPreviewLink {
+    source: String,
+    target: String,
 }
 
 pub fn sync_card_node(
@@ -159,6 +185,125 @@ pub fn list_relations(
         .map_err(|error| error.to_string())?;
     rows.collect::<Result<Vec<_>, _>>()
         .map_err(|error| error.to_string())
+}
+
+pub fn ensure_graph_seeded_from_studio_preview(
+    connection: &Connection,
+    project_id: &str,
+) -> Result<(), String> {
+    let existing_nodes = list_nodes(connection, project_id)?;
+    let existing_relations = list_relations(connection, project_id)?;
+    if !existing_nodes.is_empty() && !existing_relations.is_empty() {
+        return Ok(());
+    }
+
+    let preview_json = connection
+        .prepare(
+            "SELECT artifact_id, title, preview_json
+             FROM studio_artifacts
+             WHERE project_id = ?1
+               AND status = 'completed'
+               AND kind IN ('knowledge_graph_3d', 'knowledge_graph')
+               AND preview_json IS NOT NULL
+             ORDER BY
+               CASE WHEN kind = 'knowledge_graph_3d' THEN 0 ELSE 1 END,
+               updated_at DESC
+             LIMIT 1",
+        )
+        .map_err(|error| error.to_string())?
+        .query_row([project_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })
+        .optional()
+        .map_err(|error| error.to_string())?;
+
+    let Some((artifact_id, artifact_title, preview_json)) = preview_json else {
+        return Ok(());
+    };
+
+    let parsed: StudioPreviewPayload =
+        serde_json::from_str(&preview_json).map_err(|error| error.to_string())?;
+    let Some(graph) = parsed.graph else {
+        return Ok(());
+    };
+    if graph.nodes.is_empty() || graph.links.is_empty() {
+        return Ok(());
+    }
+
+    let now = Utc::now().to_rfc3339();
+    let mut node_id_by_label = list_nodes(connection, project_id)?
+        .into_iter()
+        .map(|node| (node.label.to_lowercase(), node.node_id))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    for node in graph.nodes {
+        let normalized_label = node.label.trim().to_lowercase();
+        if normalized_label.is_empty() {
+            continue;
+        }
+        if node_id_by_label.contains_key(&normalized_label) {
+            continue;
+        }
+        let node_id = Uuid::new_v4().to_string();
+        let metadata_json = serde_json::json!({
+            "studioArtifactId": artifact_id,
+            "studioArtifactTitle": artifact_title,
+            "previewNodeId": node.id,
+            "weight": node.weight.unwrap_or(1)
+        })
+        .to_string();
+        connection
+            .execute(
+                "INSERT INTO graph_nodes (
+                    node_id, project_id, node_type, label, source_ref, metadata_json, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)",
+                params![
+                    node_id,
+                    project_id,
+                    "concept",
+                    node.label.trim(),
+                    metadata_json,
+                    now,
+                    now
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        node_id_by_label.insert(normalized_label, node_id);
+    }
+
+    for link in graph.links {
+        let from_node_id = node_id_by_label
+            .get(&link.source.trim().to_lowercase())
+            .cloned();
+        let to_node_id = node_id_by_label
+            .get(&link.target.trim().to_lowercase())
+            .cloned();
+        let (Some(from_node_id), Some(to_node_id)) = (from_node_id, to_node_id) else {
+            continue;
+        };
+        if from_node_id == to_node_id {
+            continue;
+        }
+        let _ = upsert_relation(
+            connection,
+            UpsertRelationInput {
+                project_id,
+                from_node_id: &from_node_id,
+                to_node_id: &to_node_id,
+                relation_type: "关联",
+                confidence: Some(0.88),
+                origin_type: "artifact",
+                source_ref: Some(&artifact_id),
+                confirmed_by_user: true,
+            },
+        )?;
+    }
+
+    Ok(())
 }
 
 pub fn upsert_relation(

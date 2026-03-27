@@ -334,11 +334,9 @@ pub fn cleanup_unreadable_documents(connection: &Connection) -> Result<(), Strin
         let can_attempt_rebuild = matches!(
             current_status,
             DocumentStatus::Chunked | DocumentStatus::Indexed | DocumentStatus::Ready
-        ) || (
-            current_status == DocumentStatus::Failed
-                && document.last_error_message.as_deref() == Some("只有 normalized 文档可以切块")
-                && document.normalized_md_path.is_some()
-        );
+        ) || (current_status == DocumentStatus::Failed
+            && document.last_error_message.as_deref() == Some("只有 normalized 文档可以切块")
+            && document.normalized_md_path.is_some());
 
         if can_attempt_rebuild {
             let maybe_project_root = source_path
@@ -346,9 +344,11 @@ pub fn cleanup_unreadable_documents(connection: &Connection) -> Result<(), Strin
                 .and_then(Path::parent)
                 .map(Path::to_path_buf);
             if let Some(project_root) = maybe_project_root {
-                if rebuild_missing_blocks(connection, &project_root, &document.document_id).is_ok() {
+                if rebuild_missing_blocks(connection, &project_root, &document.document_id).is_ok()
+                {
                     if current_status == DocumentStatus::Failed
-                        && document.last_error_message.as_deref() == Some("只有 normalized 文档可以切块")
+                        && document.last_error_message.as_deref()
+                            == Some("只有 normalized 文档可以切块")
                     {
                         let _ = transition_document_status(
                             connection,
@@ -454,10 +454,7 @@ pub fn delete_document(
             .execute("DELETE FROM graph_relations WHERE from_node_id IN (SELECT node_id FROM graph_nodes WHERE source_ref = ?1) OR to_node_id IN (SELECT node_id FROM graph_nodes WHERE source_ref = ?1)", [card_id])
             .map_err(|error| error.to_string())?;
         connection
-            .execute(
-                "DELETE FROM graph_nodes WHERE source_ref = ?1",
-                [card_id],
-            )
+            .execute("DELETE FROM graph_nodes WHERE source_ref = ?1", [card_id])
             .map_err(|error| error.to_string())?;
         connection
             .execute("DELETE FROM cards WHERE card_id = ?1", [card_id])
@@ -477,7 +474,10 @@ pub fn delete_document(
         )
         .map_err(|error| error.to_string())?;
     connection
-        .execute("DELETE FROM documents WHERE document_id = ?1", [document_id])
+        .execute(
+            "DELETE FROM documents WHERE document_id = ?1",
+            [document_id],
+        )
         .map_err(|error| error.to_string())?;
 
     if delete_files {

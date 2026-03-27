@@ -4,7 +4,7 @@ pub mod structure_chunker;
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use chrono::Utc;
 use rusqlite::{Connection, params};
@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ai::model_adapter::{ModelRequest, build_model_adapter};
 use crate::config::AppConfig;
-use crate::services::block::BlockRecord;
+use crate::services::block::{BlockRecord, normalize_block_type};
 use crate::services::import::{
     DocumentRecord, DocumentStatus, get_document, transition_document_status,
 };
@@ -78,7 +78,9 @@ pub fn chunk_document(
     }
 
     let normalized = read_normalized_result(&current_document)?;
-    let chunking_from = if config.model_settings.provider == "mock" {
+    let skip_ai_chunking =
+        config.model_settings.provider == "mock" || should_skip_ai_chunking(&normalized);
+    let chunking_from = if skip_ai_chunking {
         DocumentStatus::Normalized
     } else {
         transition_document_status(
@@ -158,20 +160,20 @@ fn build_draft_blocks_with_ai(
     if config.model_settings.provider == "mock" {
         return Err("mock provider 跳过 AI 分块".to_string());
     }
+    if should_skip_ai_chunking(normalized) {
+        return Err("文档体量过大，跳过 AI 分块并回退规则分块".to_string());
+    }
 
-    let prompt_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("..")
-        .join("packages")
-        .join("prompt-templates")
+    let prompt_path = config
+        .prompt_templates_dir
         .join("import_semantic_chunk_system.md");
     let system_prompt = fs::read_to_string(prompt_path).map_err(|error| error.to_string())?;
     let adapter = build_model_adapter(&config.model_settings)?;
     let prompt = format!(
         "文档标题：{}\n现有章节：{}\n\n请对下面的 Markdown 做语义分块：\n{}",
         normalized.manifest.title,
-        serde_json::to_string_pretty(&normalized.manifest.sections).map_err(|error| error.to_string())?,
+        serde_json::to_string_pretty(&normalized.manifest.sections)
+            .map_err(|error| error.to_string())?,
         normalized.markdown
     );
     let response = adapter.complete(&ModelRequest {
@@ -228,11 +230,21 @@ fn build_draft_blocks_with_ai(
             } else {
                 None
             };
+            let fallback_block_type = if heading_path.len() > 1 {
+                "section".to_string()
+            } else {
+                "paragraph".to_string()
+            };
+            let block_type = block
+                .block_type
+                .as_deref()
+                .map(normalize_block_type)
+                .unwrap_or(fallback_block_type);
             Some(DraftBlock {
                 title: block.title.filter(|value| !value.trim().is_empty()),
                 heading_path,
                 depth: 0,
-                block_type: block.block_type.unwrap_or_else(|| "section".to_string()),
+                block_type,
                 content_md,
                 source_anchor: Some(
                     block
@@ -251,6 +263,24 @@ fn build_draft_blocks_with_ai(
     validate_ai_draft_blocks(normalized, &draft_blocks)?;
 
     Ok(draft_blocks)
+}
+
+fn should_skip_ai_chunking(normalized: &NormalizeResult) -> bool {
+    let chars = normalized.markdown.chars().count();
+    let lines = normalized.markdown.lines().count();
+    let section_count = normalized.manifest.sections.len();
+    let is_pdf = normalized.manifest.source_type.eq_ignore_ascii_case("pdf");
+
+    if is_pdf {
+        return true;
+    }
+    if chars > 220_000 {
+        return true;
+    }
+    if lines > 6500 {
+        return true;
+    }
+    section_count > 1200
 }
 
 fn validate_ai_draft_blocks(
@@ -278,7 +308,8 @@ fn validate_ai_draft_blocks(
             return Err("AI 分块存在空内容".to_string());
         }
 
-        if let Some((next_cursor, hit_len)) = find_in_order(&normalized_source, cursor, &block_text) {
+        if let Some((next_cursor, hit_len)) = find_in_order(&normalized_source, cursor, &block_text)
+        {
             cursor = next_cursor;
             matched_len += hit_len;
             continue;
@@ -320,7 +351,10 @@ fn find_in_order(source: &str, cursor: usize, content: &str) -> Option<(usize, u
 fn normalize_compare_text(value: &str) -> String {
     value
         .chars()
-        .filter(|character| character.is_alphanumeric() || !character.is_ascii_whitespace() && !character.is_ascii_punctuation())
+        .filter(|character| {
+            character.is_alphanumeric()
+                || !character.is_ascii_whitespace() && !character.is_ascii_punctuation()
+        })
         .flat_map(|character| character.to_lowercase())
         .collect()
 }
@@ -362,6 +396,7 @@ pub fn persist_blocks(
         let heading_path_json =
             serde_json::to_string(&draft.heading_path).map_err(|error| error.to_string())?;
         let token_count = estimate_tokens(&content_md) as i64;
+        let normalized_block_type = normalize_block_type(&draft.block_type);
 
         connection
             .execute(
@@ -373,7 +408,7 @@ pub fn persist_blocks(
                     block_id,
                     document.project_id,
                     document.document_id,
-                    draft.block_type,
+                    normalized_block_type,
                     heading_path_json,
                     order_index as i64,
                     content_md,
@@ -394,7 +429,7 @@ pub fn persist_blocks(
             block_id: block_id.clone(),
             project_id: document.project_id.clone(),
             document_id: document.document_id.clone(),
-            block_type: draft.block_type,
+            block_type: normalize_block_type(&draft.block_type),
             title: draft.title.clone(),
             heading_path: draft.heading_path.clone(),
             depth: draft.depth,

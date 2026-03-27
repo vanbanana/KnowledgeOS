@@ -26,10 +26,14 @@ pub struct AgentAuditRecord {
 }
 
 pub fn get_agent_audit(app_state: &AppState, task_id: &str) -> Result<AgentAuditRecord, String> {
-    let task = get_agent_task(&app_state.db, task_id)?.ok_or_else(|| "Agent 任务不存在".to_string())?;
+    let task =
+        get_agent_task(&app_state.db, task_id)?.ok_or_else(|| "Agent 任务不存在".to_string())?;
     let logs = list_task_logs(&app_state.db, task_id)?;
     let snapshots = list_snapshots_by_task(&app_state.db, task_id)?;
-    let diffs = snapshots.iter().map(build_diff_entry).collect::<Result<Vec<_>, _>>()?;
+    let diffs = snapshots
+        .iter()
+        .map(build_diff_entry)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(AgentAuditRecord {
         task,
         logs,
@@ -39,7 +43,8 @@ pub fn get_agent_audit(app_state: &AppState, task_id: &str) -> Result<AgentAudit
 }
 
 fn build_diff_entry(snapshot: &SnapshotRecord) -> Result<AuditDiffEntry, String> {
-    let payload: Value = serde_json::from_str(&snapshot.snapshot_json).map_err(|error| error.to_string())?;
+    let payload: Value =
+        serde_json::from_str(&snapshot.snapshot_json).map_err(|error| error.to_string())?;
     let before_text = payload
         .get("record")
         .and_then(render_record_summary)
