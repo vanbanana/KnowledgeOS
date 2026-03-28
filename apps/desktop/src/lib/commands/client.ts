@@ -68,6 +68,17 @@ import type {
 import { invokeTyped } from "./invoke";
 import { desktopCommandSchemas, type BootstrapPayload } from "./schemas";
 
+export interface GraphSourceSnippet {
+  documentId: string;
+  title: string;
+  snippet: string;
+  score: number;
+}
+
+export interface QueryGraphSourceOutput {
+  snippets: GraphSourceSnippet[];
+}
+
 export async function getBootstrapPayload(): Promise<BootstrapPayload> {
   return invokeTyped(desktopCommandSchemas.appGetBootstrap, undefined);
 }
@@ -106,6 +117,10 @@ export async function deleteDocument(input: DeleteDocumentInput): Promise<Delete
 
 export async function listBlocks(documentId: string): Promise<ListBlocksOutput> {
   return invokeTyped(desktopCommandSchemas.blockList, { documentId });
+}
+
+export async function getBlock(blockId: string): Promise<BlockCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.blockGet, { blockId });
 }
 
 export async function updateBlock(input: {
@@ -255,6 +270,19 @@ export async function listStudioArtifacts(
 
 export async function getStudioArtifact(artifactId: string): Promise<StudioArtifactCommandOutput> {
   return invokeTyped(desktopCommandSchemas.studioGet, { artifactId });
+}
+
+export async function cancelStudioArtifact(artifactId: string): Promise<StudioArtifactCommandOutput> {
+  return invokeTyped(desktopCommandSchemas.studioCancel, { artifactId });
+}
+
+export async function queryGraphSource(input: {
+  projectId: string;
+  keyword: string;
+  artifactId?: string;
+  limit?: number;
+}): Promise<QueryGraphSourceOutput> {
+  return invokeTyped(desktopCommandSchemas.studioQuerySource, input);
 }
 
 export async function enqueueMockJob(input: EnqueueJobInput): Promise<EnqueueJobOutput> {

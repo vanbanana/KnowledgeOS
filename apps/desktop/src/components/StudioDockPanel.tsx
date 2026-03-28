@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Document, Project, StudioArtifact, StudioArtifactKind } from "@knowledgeos/shared-types";
 import {
+  cancelStudioArtifact,
   createStudioArtifact,
   generateStudioArtifact,
   listStudioArtifacts
@@ -21,6 +22,16 @@ interface StudioTileDefinition {
   kind: StudioArtifactKind;
   title: string;
   subtitle: string;
+}
+
+interface StudioProgressPreviewPayload {
+  excerpt?: string;
+  progress?: {
+    currentStage?: string;
+    details?: string[];
+    excerpt?: string;
+    updatedAt?: string;
+  };
 }
 
 const STUDIO_TILES: StudioTileDefinition[] = [
@@ -79,6 +90,13 @@ export function StudioDockPanel({
       await queryClient.invalidateQueries({ queryKey: ["studio-artifacts", currentProject?.projectId] });
     },
     onError: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["studio-artifacts", currentProject?.projectId] });
+    }
+  });
+
+  const cancelArtifactMutation = useMutation({
+    mutationFn: async (artifactId: string) => cancelStudioArtifact(artifactId),
+    onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["studio-artifacts", currentProject?.projectId] });
     }
   });
@@ -164,6 +182,8 @@ export function StudioDockPanel({
               <StudioArtifactRow
                 key={artifact.artifactId}
                 artifact={artifact}
+                cancelling={cancelArtifactMutation.isPending && cancelArtifactMutation.variables === artifact.artifactId}
+                onCancel={(artifactId) => cancelArtifactMutation.mutate(artifactId)}
                 onOpenKnowledgeGraph={onOpenKnowledgeGraph}
                 onOpenKnowledgeGraph3D={onOpenKnowledgeGraph3D}
                 onOpenPracticeSet={onOpenPracticeSet}
@@ -180,6 +200,8 @@ export function StudioDockPanel({
 
 function StudioArtifactRow({
   artifact,
+  cancelling,
+  onCancel,
   onOpenKnowledgeGraph,
   onOpenKnowledgeGraph3D,
   onOpenPracticeSet,
@@ -187,12 +209,19 @@ function StudioArtifactRow({
   onOpenPresentation
 }: {
   artifact: StudioArtifact;
+  cancelling: boolean;
+  onCancel: (artifactId: string) => void;
   onOpenKnowledgeGraph: (artifactId: string) => void;
   onOpenKnowledgeGraph3D: (artifactId: string) => void;
   onOpenPracticeSet: (artifactId: string) => void;
   onOpenMindMap: (artifactId: string) => void;
   onOpenPresentation: (artifactId: string) => void;
 }) {
+  const preview = useMemo(() => parseStudioProgressPreview(artifact.previewJson), [artifact.previewJson]);
+  const detailLines = preview?.progress?.details ?? [];
+  const detailExcerpt = preview?.progress?.excerpt ?? preview?.excerpt ?? "";
+  const stageText = preview?.progress?.currentStage ?? artifact.currentStage ?? "等待开始";
+
   const openArtifact = () => {
     if (artifact.kind === "knowledge_graph") {
       onOpenKnowledgeGraph(artifact.artifactId);
@@ -224,14 +253,27 @@ function StudioArtifactRow({
           <span>{artifact.progressPercent}%</span>
           <span>{mapStatusLabel(artifact.status)}</span>
         </div>
-        <div className="utility-studio-record-stage">{artifact.currentStage ?? "等待开始"}</div>
+        <div className="utility-studio-record-stage">{stageText}</div>
+        {detailLines.length > 0 ? (
+          <div className="utility-studio-record-detail-list">
+            {detailLines.slice(-4).map((line, index) => (
+              <span key={`${artifact.artifactId}-detail-${index}`} className="utility-studio-record-detail-line">
+                {line}
+              </span>
+            ))}
+          </div>
+        ) : null}
+        {detailExcerpt ? <div className="utility-studio-record-excerpt">{detailExcerpt}</div> : null}
+        {artifact.status === "failed" && artifact.errorMessage ? (
+          <div className="utility-studio-record-error">{artifact.errorMessage}</div>
+        ) : null}
         {artifact.status !== "completed" && artifact.status !== "failed" ? (
           <div className="utility-studio-record-progress">
             <div className="utility-studio-record-progress-bar">
               <span style={{ width: `${Math.max(8, artifact.progressPercent)}%` }} />
             </div>
             <div className="utility-studio-record-progress-meta">
-              <span>{artifact.currentStage ?? "正在处理"}</span>
+              <span>{stageText}</span>
               <span>{artifact.progressPercent}%</span>
             </div>
           </div>
@@ -242,7 +284,9 @@ function StudioArtifactRow({
       ) : artifact.status === "failed" ? (
         <span className="utility-studio-status-text utility-studio-status-failed">失败</span>
       ) : (
-        <span className="utility-studio-status-text">处理中</span>
+        <button className="utility-studio-open-button" disabled={cancelling} onClick={() => onCancel(artifact.artifactId)}>
+          {cancelling ? "停止中" : "停止"}
+        </button>
       )}
     </div>
   );
@@ -297,4 +341,15 @@ function getArtifactDisplayTitle(artifact: StudioArtifact) {
 function getDocumentDisplayName(document: Document) {
   const rawName = document.title ?? document.sourcePath.split(/[\\/]/).pop() ?? document.sourcePath;
   return rawName.replace(/^[0-9a-f]{8}[-_]/i, "");
+}
+
+function parseStudioProgressPreview(previewJson: string | null): StudioProgressPreviewPayload | null {
+  if (!previewJson) {
+    return null;
+  }
+  try {
+    return JSON.parse(previewJson) as StudioProgressPreviewPayload;
+  } catch {
+    return null;
+  }
 }

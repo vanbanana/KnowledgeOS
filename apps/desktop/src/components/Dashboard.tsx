@@ -81,6 +81,7 @@ export function Dashboard({ bootstrap }: DashboardProps) {
   const [secondaryPanelKind, setSecondaryPanelKind] = useState<"studio" | null>(null);
   const [viewportWidth, setViewportWidth] = useState(() => Math.max(360, window.innerWidth));
   const [isLibraryDrawerOpen, setIsLibraryDrawerOpen] = useState(false);
+  const [isLibraryCollapsed, setIsLibraryCollapsed] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const currentProject =
@@ -92,7 +93,7 @@ export function Dashboard({ bootstrap }: DashboardProps) {
     projectDocuments.find((document) => document.documentId === selectedDocumentId) ?? projectDocuments[0] ?? null;
   const isGraphView = currentView === "图谱";
   const isCompactLayout = viewportWidth <= 760;
-  const showLibraryPane = !isGraphView && (!isCompactLayout || isLibraryDrawerOpen);
+  const isLibraryExpanded = !isGraphView && (isCompactLayout ? isLibraryDrawerOpen : !isLibraryCollapsed);
 
   const searchQuery = useQuery({
     queryKey: ["hybrid-search", currentProject?.projectId, searchText],
@@ -473,10 +474,18 @@ export function Dashboard({ bootstrap }: DashboardProps) {
         </div>
         {!isGraphView ? (
           <button
-            className={isLibraryDrawerOpen ? "topbar-library-toggle topbar-library-toggle-active" : "topbar-library-toggle"}
-            onClick={() => setIsLibraryDrawerOpen((current) => !current)}
+            className={isLibraryExpanded ? "topbar-library-toggle topbar-library-toggle-active" : "topbar-library-toggle"}
+            onClick={() => {
+              if (isCompactLayout) {
+                setIsLibraryDrawerOpen((current) => !current);
+                return;
+              }
+              setIsLibraryCollapsed((current) => !current);
+            }}
+            aria-label="切换资源库"
+            title="切换资源库"
           >
-            资源库
+            <SvgLibraryPanelIcon />
           </button>
         ) : null}
         <nav className="topbar-menu">
@@ -556,6 +565,8 @@ export function Dashboard({ bootstrap }: DashboardProps) {
             ? "desktop-layout desktop-layout-windowless desktop-layout-graph-mode"
             : isCompactLayout
               ? "desktop-layout desktop-layout-windowless desktop-layout-compact"
+              : isLibraryCollapsed
+                ? "desktop-layout desktop-layout-windowless desktop-layout-library-collapsed"
               : "desktop-layout desktop-layout-windowless"
         }
       >
@@ -573,11 +584,28 @@ export function Dashboard({ bootstrap }: DashboardProps) {
             isCompactLayout
               ? isLibraryDrawerOpen
                 ? "library-pane library-pane-drawer library-pane-drawer-open"
-                : "library-pane library-pane-drawer"
-              : "library-pane"
+                : "library-pane library-pane-collapsed"
+              : isLibraryCollapsed
+                ? "library-pane library-pane-collapsed"
+                : "library-pane"
           }
-          aria-hidden={!showLibraryPane}
+          aria-hidden={isGraphView}
         >
+          <button
+            className="library-collapsed-handle"
+            type="button"
+            onClick={() => {
+              if (isCompactLayout) {
+                setIsLibraryDrawerOpen(true);
+                return;
+              }
+              setIsLibraryCollapsed(false);
+            }}
+            aria-label="展开资源库"
+            title="展开资源库"
+          >
+            <SvgLibraryPanelIcon />
+          </button>
           <div className="library-pane-top">
             <div className="library-search-row">
               <input
@@ -728,7 +756,6 @@ export function Dashboard({ bootstrap }: DashboardProps) {
                           }}
                         >
                           <span className="tree-document-name">{getDocumentDisplayName(document)}</span>
-                          <span className="tree-document-state">{document.parseStatus}</span>
                         </button>
                       ))}
                     </div>
@@ -791,57 +818,107 @@ export function Dashboard({ bootstrap }: DashboardProps) {
         ) : null}
 
         {currentView === "阅读器" ? (
-          currentDocument?.sourceType === "pdf" ? (
-            <PdfReaderWorkspace
-              currentProject={currentProject}
-              documents={projectDocuments}
-              currentDocument={currentDocument}
-              onSelectDocument={setSelectedDocumentId}
-              bootstrapBlocks={bootstrap.blocks}
-              onOpenGraphView={() => {
-                setCurrentView("图谱");
-              }}
-            />
-          ) : (
-            <ReaderWorkspace
-              currentProject={currentProject}
-              documents={projectDocuments}
-              currentDocument={currentDocument}
-              onSelectDocument={setSelectedDocumentId}
-              bootstrapBlocks={bootstrap.blocks}
-              paperAnalyzeTrigger={paperAnalyzeTrigger}
-              onFocusSearch={() => searchInputRef.current?.focus()}
-              onTriggerPaperAnalyze={() => {
-                setCurrentView("阅读器");
-                if (currentDocument) {
-                  setPaperAnalyzeTrigger((current) => current + 1);
-                }
-              }}
-              onOpenKnowledgeGraph={(artifactId) => {
-                setSelectedKnowledgeGraphArtifactId(artifactId);
-                setCurrentView("图谱");
-              }}
-              onOpenKnowledgeGraph3D={(artifactId) => {
-                setSelectedKnowledgeGraphArtifactId(artifactId);
-                setCurrentView("图谱");
-              }}
-              onOpenPracticeSet={(artifactId) => {
-                setSelectedPracticeSetArtifactId(artifactId);
-                setCurrentView("练习题");
-              }}
-              onOpenMindMap={(artifactId) => {
-                setSelectedMindMapArtifactId(artifactId);
-                setCurrentView("思维导图");
-              }}
-              onOpenPresentation={(artifactId) => {
-                setSelectedPresentationArtifactId(artifactId);
-                setCurrentView("演示文稿");
-              }}
-              onOpenGraphView={() => {
-                setCurrentView("图谱");
-              }}
-            />
-          )
+          <section className="workspace-shell-with-dock">
+            <div className="workspace-shell-main">
+              {currentDocument?.sourceType === "pdf" ? (
+                <PdfReaderWorkspace
+                  currentProject={currentProject}
+                  documents={projectDocuments}
+                  currentDocument={currentDocument}
+                  bootstrapBlocks={bootstrap.blocks}
+                />
+              ) : (
+                <ReaderWorkspace
+                  currentProject={currentProject}
+                  documents={projectDocuments}
+                  currentDocument={currentDocument}
+                  onSelectDocument={setSelectedDocumentId}
+                  bootstrapBlocks={bootstrap.blocks}
+                  paperAnalyzeTrigger={paperAnalyzeTrigger}
+                  onFocusSearch={() => searchInputRef.current?.focus()}
+                  onTriggerPaperAnalyze={() => {
+                    setCurrentView("阅读器");
+                    if (currentDocument) {
+                      setPaperAnalyzeTrigger((current) => current + 1);
+                    }
+                  }}
+                  onOpenKnowledgeGraph={(artifactId) => {
+                    setSelectedKnowledgeGraphArtifactId(artifactId);
+                    setCurrentView("图谱");
+                  }}
+                  onOpenKnowledgeGraph3D={(artifactId) => {
+                    setSelectedKnowledgeGraphArtifactId(artifactId);
+                    setCurrentView("图谱");
+                  }}
+                  onOpenPracticeSet={(artifactId) => {
+                    setSelectedPracticeSetArtifactId(artifactId);
+                    setCurrentView("练习题");
+                  }}
+                  onOpenMindMap={(artifactId) => {
+                    setSelectedMindMapArtifactId(artifactId);
+                    setCurrentView("思维导图");
+                  }}
+                  onOpenPresentation={(artifactId) => {
+                    setSelectedPresentationArtifactId(artifactId);
+                    setCurrentView("演示文稿");
+                  }}
+                  onOpenGraphView={() => {
+                    setCurrentView("图谱");
+                  }}
+                />
+              )}
+            </div>
+            {currentDocument?.sourceType === "pdf" ? (
+              <aside className="workspace-right-rail">
+                <button
+                  className="utility-rail-button"
+                  onClick={() => searchInputRef.current?.focus()}
+                  aria-label="搜索"
+                  title="搜索"
+                >
+                  <SvgSearchIcon />
+                </button>
+                <button
+                  className="utility-rail-button utility-rail-button-active"
+                  onClick={() => setCurrentView("阅读器")}
+                  aria-label="阅读器"
+                  title="阅读器"
+                >
+                  <SvgDocumentIcon />
+                </button>
+                <button
+                  className="utility-rail-button"
+                  onClick={() => {
+                    setCurrentView("阅读器");
+                    if (currentDocument) {
+                      setPaperAnalyzeTrigger((current) => current + 1);
+                    }
+                  }}
+                  aria-label="学习解析模式"
+                  title="学习解析模式"
+                >
+                  <SvgPaperExplainIcon />
+                </button>
+                <button
+                  className="utility-rail-button"
+                  onClick={() => setCurrentView("图谱")}
+                  aria-label="图谱"
+                  title="图谱"
+                >
+                  <SvgGraphIcon />
+                </button>
+                <div className="workspace-right-rail-spacer" />
+                <button
+                  className={secondaryPanelKind === "studio" ? "utility-rail-button utility-rail-button-active" : "utility-rail-button"}
+                  onClick={() => setSecondaryPanelKind((current) => current === "studio" ? null : "studio")}
+                  aria-label="Studio"
+                  title="Studio"
+                >
+                  <SvgStudioIcon />
+                </button>
+              </aside>
+            ) : null}
+          </section>
         ) : (
           <section className={isGraphView ? "workspace-shell-with-dock workspace-shell-with-dock-graph" : "workspace-shell-with-dock"}>
             <div className="workspace-shell-main">
@@ -1195,6 +1272,21 @@ function SvgStudioIcon() {
       <path d="M5 5.5H11" />
       <path d="M5 8H8.6" />
       <path d="M5 10.5H9.8" />
+    </svg>
+  );
+}
+
+function SvgLibraryPanelIcon() {
+  return (
+    <svg className="topbar-library-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3.5" y="3.5" width="17" height="17" rx="2.8" />
+      <path d="M10 6.5V17.5" />
+      <path d="M7 8.5H8.5" />
+      <path d="M7 12H8.5" />
+      <path d="M7 15.5H8.5" />
+      <path d="M12.5 8.5H17.2" />
+      <path d="M12.5 12H17.2" />
+      <path d="M12.5 15.5H17.2" />
     </svg>
   );
 }

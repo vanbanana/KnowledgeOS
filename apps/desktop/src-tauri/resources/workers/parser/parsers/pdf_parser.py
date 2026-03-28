@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 
 try:
     import fitz  # type: ignore[import-not-found]
-except Exception:  # pragma: no cover
+except Exception:
     fitz = None
 
 from pypdf import PdfReader
@@ -16,30 +17,28 @@ from .common import build_manifest, section, title_from_path
 
 def parse_pdf(path: Path, source_type: str, progress_path: str | None = None) -> dict:
     progress_file = Path(progress_path) if progress_path else None
+    warnings: list[str] = []
+
     if fitz is not None:
-        title, page_count, text_pages, page_markdown_parts = extract_with_pymupdf(path, progress_file)
-        warnings = []
-        if page_count > 0 and text_pages < page_count:
-            warnings.append(
-                f"共 {page_count} 页，已直接提取文本 {text_pages} 页，其余页面建议走 OCR。"
-            )
+        title, page_count, text_pages, page_markdown_parts = extract_with_pymupdf(
+            path, progress_file
+        )
+        warnings.append("已使用 PyMuPDF 解析链路。")
     else:
-        title, page_count, text_pages, page_markdown_parts = extract_with_pypdf(path, progress_file)
-        warnings = ["未检测到 PyMuPDF，当前使用 pypdf 回退解析。"]
-        if page_count > 0 and text_pages < page_count:
-            warnings.append(
-                f"共 {page_count} 页，已直接提取文本 {text_pages} 页，其余页面建议走 OCR。"
-            )
+        title, page_count, text_pages, page_markdown_parts = extract_with_pypdf(
+            path, progress_file
+        )
+        warnings.append("未检测到 PyMuPDF，已回退到 pypdf 解析。")
+
+    if page_count > 0 and text_pages < page_count:
+        warnings.append(f"共 {page_count} 页，已提取文本 {text_pages} 页。")
 
     markdown = f"# {title}\n\n"
     if page_markdown_parts:
         markdown += "\n\n".join(page_markdown_parts).strip()
     else:
-        markdown += (
-            "当前 PDF 没有提取到可转换的正文内容。"
-            "如果这是扫描件，后续会自动走 OCR 流程。"
-        )
-        warnings.append("PDF 未提取到正文，可能是扫描件")
+        markdown += "当前 PDF 没有提取到可转换的正文内容。"
+        warnings.append("PDF 未提取到正文，可能是扫描件或图像型文档。")
 
     write_progress(progress_file, "pdf_extract_done", page_count, page_count, "文本抽取完成")
 
@@ -83,7 +82,9 @@ def extract_with_pymupdf(path: Path, progress_file: Path | None) -> tuple[str, i
             cleaned_text = "\n".join(line.rstrip() for line in page_text.splitlines()).strip()
             if not cleaned_text:
                 continue
-            page_markdown_parts.append(f"## 第{page_index + 1}页\n\n{cleaned_text}")
+            page_markdown_parts.append(
+                f"## 第{page_index + 1}页\n\n{enhance_code_fences(cleaned_text)}"
+            )
 
         return title, total_pages, text_pages, page_markdown_parts
 
@@ -113,7 +114,9 @@ def extract_with_pypdf(path: Path, progress_file: Path | None) -> tuple[str, int
         cleaned_text = "\n".join(line.rstrip() for line in page_text.splitlines()).strip()
         if not cleaned_text:
             continue
-        page_markdown_parts.append(f"## 第{page_index + 1}页\n\n{cleaned_text}")
+        page_markdown_parts.append(
+            f"## 第{page_index + 1}页\n\n{enhance_code_fences(cleaned_text)}"
+        )
 
     return title, total_pages, text_pages, page_markdown_parts
 
@@ -178,3 +181,52 @@ def slugify_anchor(value: str) -> str:
                 output.append("-")
                 previous_dash = True
     return "".join(output).strip("-") or "section"
+
+
+def enhance_code_fences(markdown: str) -> str:
+    lines = markdown.splitlines()
+    output: list[str] = []
+    code_buffer: list[str] = []
+
+    def flush_code_buffer() -> None:
+        nonlocal code_buffer
+        if not code_buffer:
+            return
+        code_signal = sum(1 for line in code_buffer if is_code_like_line(line))
+        if len(code_buffer) >= 2 and code_signal >= 2:
+            output.append("```cpp")
+            output.extend(code_buffer)
+            output.append("```")
+        else:
+            output.extend(code_buffer)
+        code_buffer = []
+
+    for line in lines:
+        if is_code_like_line(line):
+            code_buffer.append(line)
+            continue
+        flush_code_buffer()
+        output.append(line)
+
+    flush_code_buffer()
+    return "\n".join(output).strip()
+
+
+def is_code_like_line(line: str) -> bool:
+    value = line.strip()
+    if not value:
+        return False
+    if value.startswith("```"):
+        return True
+    if re.search(r"[{};#]", value):
+        return True
+    if re.search(r"(::|->|=>|==|!=|<=|>=)", value):
+        return True
+    if re.match(
+        r"^(if|else|for|while|switch|case|return|class|struct|template|public|private|protected|void|int|char|string|const|static)\b",
+        value,
+    ):
+        return True
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\s*\([^)]*\)\s*$", value):
+        return True
+    return False

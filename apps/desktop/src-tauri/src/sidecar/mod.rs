@@ -1,21 +1,18 @@
 use std::fs;
 use std::io::Read;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::thread;
 use std::time::Duration;
 
 use crate::config::AppConfig;
-use crate::services::normalize::{ManifestSection, NormalizeResult, NormalizedManifest};
-use reqwest::blocking::Client;
+use crate::services::normalize::NormalizeResult;
 use serde_json::Value;
+use uuid::Uuid;
 use wait_timeout::ChildExt;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-
-const DEFAULT_OCR_PDF_ENDPOINT: &str = "http://106.12.174.212/ocr/pdf";
-const PDF_EMPTY_PLACEHOLDER: &str = "当前 PDF 没有提取到可转换的正文内容";
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -50,57 +47,7 @@ pub fn parse_document(
         "parse_file",
     )?;
     let payload = parse_json_output(output)?;
-    let mut normalized: NormalizeResult =
-        serde_json::from_value(payload).map_err(|error| error.to_string())?;
-
-    if source_type.eq_ignore_ascii_case("pdf") && should_fallback_to_ocr(&normalized) {
-        if should_auto_ocr() {
-            let _ = write_progress_json(
-                &progress_path,
-                serde_json::json!({
-                    "phase": "ocr_processing",
-                    "message": "检测到扫描页，正在调用 OCR 服务…"
-                }),
-            );
-            match parse_pdf_with_ocr(source_path, &normalized) {
-                Ok(ocr_result) => {
-                    normalized = ocr_result;
-                    let _ = write_progress_json(
-                        &progress_path,
-                        serde_json::json!({
-                            "phase": "ocr_completed",
-                            "message": "OCR 处理完成，正在进入分块阶段。"
-                        }),
-                    );
-                }
-                Err(error) => {
-                    let warning = format!("检测到扫描件 PDF，但 OCR 服务调用失败：{error}");
-                    if !normalized
-                        .manifest
-                        .warnings
-                        .iter()
-                        .any(|item| item == &warning)
-                    {
-                        normalized.manifest.warnings.push(warning);
-                    }
-                }
-            }
-        } else {
-            let warning = "检测到扫描件 PDF，已按极速模式跳过自动 OCR（可通过 KNOWFLOW_AUTO_OCR=true 开启）";
-            if !normalized.manifest.warnings.iter().any(|item| item == warning) {
-                normalized.manifest.warnings.push(warning.to_string());
-            }
-            let _ = write_progress_json(
-                &progress_path,
-                serde_json::json!({
-                    "phase": "ocr_skipped",
-                    "message": "已跳过自动 OCR，正在进入分块阶段。"
-                }),
-            );
-        }
-    }
-
-    Ok(normalized)
+    serde_json::from_value(payload).map_err(|error| error.to_string())
 }
 
 pub fn generate_presentation_pptx(
@@ -117,6 +64,31 @@ pub fn generate_presentation_pptx(
         .arg(presentation_json);
     let output = run_parser_command(&mut command, Duration::from_secs(180), "generate_pptx")?;
     parse_json_output(output)
+}
+
+pub fn enhance_graph_with_networkx(
+    config: &AppConfig,
+    graph_payload: &Value,
+) -> Result<Value, String> {
+    let payload_path = build_graph_enhance_payload_path(config)?;
+    let payload_text = serde_json::to_string(graph_payload).map_err(|error| error.to_string())?;
+    fs::write(&payload_path, payload_text).map_err(|error| error.to_string())?;
+
+    let mut command = build_python_command(&config.parser_worker_path);
+    command
+        .arg("enhance_graph")
+        .arg("--graph-path")
+        .arg(&payload_path);
+    let output = run_parser_command(&mut command, Duration::from_secs(120), "enhance_graph");
+
+    let _ = fs::remove_file(&payload_path);
+    let output = output?;
+    let payload = parse_json_output(output)?;
+    let enhanced = payload
+        .get("graph")
+        .cloned()
+        .ok_or_else(|| "NetworkX 增强返回缺少 graph 字段".to_string())?;
+    Ok(enhanced)
 }
 
 fn build_python_command(worker_path: &std::path::Path) -> Command {
@@ -147,34 +119,48 @@ fn run_parser_command(
         .spawn()
         .map_err(|error| error.to_string())?;
 
-    match child
+    let stdout_reader = child.stdout.take().map(|mut pipe| {
+        thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = pipe.read_to_end(&mut buffer);
+            buffer
+        })
+    });
+    let stderr_reader = child.stderr.take().map(|mut pipe| {
+        thread::spawn(move || {
+            let mut buffer = Vec::new();
+            let _ = pipe.read_to_end(&mut buffer);
+            buffer
+        })
+    });
+
+    let status = match child
         .wait_timeout(timeout)
         .map_err(|error| error.to_string())?
     {
-        Some(_) => {
-            let mut stdout = Vec::new();
-            let mut stderr = Vec::new();
-            if let Some(mut pipe) = child.stdout.take() {
-                let _ = pipe.read_to_end(&mut stdout);
-            }
-            if let Some(mut pipe) = child.stderr.take() {
-                let _ = pipe.read_to_end(&mut stderr);
-            }
-            Ok(std::process::Output {
-                status: child.wait().map_err(|error| error.to_string())?,
-                stdout,
-                stderr,
-            })
-        }
+        Some(status) => status,
         None => {
             child.kill().map_err(|error| error.to_string())?;
             let _ = child.wait();
-            Err(format!(
+            return Err(format!(
                 "parser worker 执行超时（任务：{task_name}，超时：{} 秒）",
                 timeout.as_secs()
-            ))
+            ));
         }
-    }
+    };
+
+    let stdout = stdout_reader
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
+    let stderr = stderr_reader
+        .map(|handle| handle.join().unwrap_or_default())
+        .unwrap_or_default();
+
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 fn parser_timeout_for_source(source_type: &str, source_path: &str) -> Duration {
@@ -182,7 +168,7 @@ fn parser_timeout_for_source(source_type: &str, source_path: &str) -> Duration {
         return timeout;
     }
 
-    let source_path = Path::new(source_path);
+    let source_path = std::path::Path::new(source_path);
     let size_mb = fs::metadata(source_path)
         .ok()
         .map(|meta| meta.len() / (1024 * 1024))
@@ -236,254 +222,14 @@ fn parse_json_output(output: std::process::Output) -> Result<serde_json::Value, 
     serde_json::from_slice(&output.stdout).map_err(|error| error.to_string())
 }
 
-fn should_fallback_to_ocr(result: &NormalizeResult) -> bool {
-    let markdown = result.markdown.trim();
-    if markdown.is_empty() || markdown.contains(PDF_EMPTY_PLACEHOLDER) {
-        return true;
-    }
-
-    result
-        .manifest
-        .warnings
-        .iter()
-        .any(|item| item.contains("未提取到正文") || item.contains("扫描件"))
-}
-
-fn should_auto_ocr() -> bool {
-    ["KNOWFLOW_AUTO_OCR", "KNOWLEDGEOS_AUTO_OCR"]
-        .iter()
-        .filter_map(|key| std::env::var(key).ok())
-        .any(|value| {
-            matches!(
-                value.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-}
-
-fn parse_pdf_with_ocr(
-    source_path: &str,
-    fallback: &NormalizeResult,
-) -> Result<NormalizeResult, String> {
-    let pdf_path = Path::new(source_path);
-    if !pdf_path.exists() {
-        return Err(format!("OCR 文件不存在：{source_path}"));
-    }
-
-    let boundary = format!("----KnowFlowOCR{}", uuid::Uuid::new_v4().simple());
-    let request_body = build_multipart_body(pdf_path, &boundary)?;
-    let endpoint = resolve_ocr_pdf_endpoint();
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(8))
-        .timeout(ocr_timeout_for_file(pdf_path))
-        .build()
-        .map_err(|error| format!("初始化 OCR 客户端失败：{error}"))?;
-
-    let response = client
-        .post(&endpoint)
-        .header(
-            reqwest::header::CONTENT_TYPE,
-            format!("multipart/form-data; boundary={boundary}"),
-        )
-        .body(request_body)
-        .send()
-        .map_err(|error| format!("请求 OCR 服务失败：{error}"))?;
-
-    let status = response.status();
-    let response_text = response
-        .text()
-        .map_err(|error| format!("读取 OCR 响应失败：{error}"))?;
-    if !status.is_success() {
-        let reason = response_text.trim();
-        if reason.is_empty() {
-            return Err(format!("OCR 服务返回错误状态：{status}"));
-        }
-        return Err(format!("OCR 服务返回错误状态：{status}，响应：{reason}"));
-    }
-
-    let payload: Value = serde_json::from_str(&response_text)
-        .map_err(|error| format!("解析 OCR 响应失败：{error}"))?;
-    if payload
-        .get("success")
-        .and_then(Value::as_bool)
-        .is_some_and(|ok| !ok)
-    {
-        let message = pick_text_field(&payload, &["message", "error"])
-            .unwrap_or_else(|| "OCR 处理失败".to_string());
-        return Err(message);
-    }
-
-    let full_text = pick_text_field(&payload, &["full_text", "fulltext", "full text"]);
-    let pages = extract_ocr_pages(&payload);
-    let has_page_text = pages.iter().any(|(_, text)| !text.trim().is_empty());
-    let has_full_text = full_text
-        .as_deref()
-        .is_some_and(|text| !text.trim().is_empty());
-    if !has_full_text && !has_page_text {
-        return Err("OCR 未识别到可用文本".to_string());
-    }
-
-    let title = if fallback.manifest.title.trim().is_empty() {
-        pdf_path
-            .file_stem()
-            .and_then(|value| value.to_str())
-            .unwrap_or("扫描件")
-            .to_string()
-    } else {
-        fallback.manifest.title.clone()
-    };
-
-    let markdown = build_ocr_markdown(&title, full_text.as_deref(), &pages);
-    let mut warnings: Vec<String> = fallback
-        .manifest
-        .warnings
-        .iter()
-        .filter(|item| !item.contains(PDF_EMPTY_PLACEHOLDER) && !item.contains("未提取到正文"))
-        .cloned()
-        .collect();
-    warnings.push("检测到扫描件 PDF，已自动调用 OCR 服务提取文本。".to_string());
-    if let Some(total_pages) = pick_numeric_field(&payload, &["total_pages", "total pages"]) {
-        warnings.push(format!("OCR 共识别 {total_pages} 页。"));
-    }
-
-    Ok(NormalizeResult {
-        ok: true,
-        markdown,
-        manifest: NormalizedManifest {
-            title,
-            source_type: fallback.manifest.source_type.clone(),
-            source_path: fallback.manifest.source_path.clone(),
-            sections: build_ocr_sections(&pages),
-            assets: fallback.manifest.assets.clone(),
-            warnings,
-        },
-    })
-}
-
-fn build_multipart_body(pdf_path: &Path, boundary: &str) -> Result<Vec<u8>, String> {
-    let filename = pdf_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("document.pdf")
-        .replace('\"', "_");
-    let file_bytes = fs::read(pdf_path).map_err(|error| format!("读取 PDF 失败：{error}"))?;
-
-    let mut body = Vec::with_capacity(file_bytes.len() + 512);
-    body.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
-    body.extend_from_slice(
-        format!("Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n")
-            .as_bytes(),
-    );
-    body.extend_from_slice(b"Content-Type: application/pdf\r\n\r\n");
-    body.extend_from_slice(&file_bytes);
-    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-    Ok(body)
-}
-
-fn ocr_timeout_for_file(pdf_path: &Path) -> Duration {
-    let size_mb = fs::metadata(pdf_path)
-        .ok()
-        .map(|meta| meta.len() / (1024 * 1024))
-        .unwrap_or(0);
-    let secs = (300 + size_mb.saturating_mul(10)).clamp(300, 10800);
-    Duration::from_secs(secs)
-}
-
 fn build_parse_progress_path(config: &AppConfig, document_id: &str) -> Result<PathBuf, String> {
     let progress_dir = config.data_dir.join("progress");
     fs::create_dir_all(&progress_dir).map_err(|error| error.to_string())?;
     Ok(progress_dir.join(format!("{document_id}.json")))
 }
 
-fn write_progress_json(path: &Path, payload: serde_json::Value) -> Result<(), String> {
-    let body = serde_json::to_string(&payload).map_err(|error| error.to_string())?;
-    fs::write(path, body).map_err(|error| error.to_string())
-}
-
-fn resolve_ocr_pdf_endpoint() -> String {
-    std::env::var("KNOWFLOW_OCR_PDF_ENDPOINT")
-        .or_else(|_| std::env::var("KNOWLEDGEOS_OCR_PDF_ENDPOINT"))
-        .unwrap_or_else(|_| DEFAULT_OCR_PDF_ENDPOINT.to_string())
-}
-
-fn pick_text_field(payload: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter().find_map(|key| {
-        payload
-            .get(*key)
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
-    })
-}
-
-fn pick_numeric_field(payload: &Value, keys: &[&str]) -> Option<u64> {
-    keys.iter()
-        .find_map(|key| payload.get(*key).and_then(Value::as_u64))
-}
-
-fn extract_ocr_pages(payload: &Value) -> Vec<(usize, String)> {
-    let mut pages = Vec::new();
-    let Some(items) = payload.get("pages").and_then(Value::as_array) else {
-        return pages;
-    };
-
-    for (index, item) in items.iter().enumerate() {
-        let page = item
-            .get("page")
-            .and_then(Value::as_u64)
-            .map(|value| value as usize)
-            .unwrap_or(index + 1);
-        if let Some(text) = pick_text_field(item, &["full_text", "fulltext", "full text"]) {
-            pages.push((page, text));
-        }
-    }
-
-    pages
-}
-
-fn build_ocr_markdown(title: &str, full_text: Option<&str>, pages: &[(usize, String)]) -> String {
-    let mut markdown = format!("# {title}\n\n");
-    if let Some(text) = full_text {
-        markdown.push_str(text.trim());
-        markdown.push('\n');
-        return markdown;
-    }
-
-    if pages.is_empty() {
-        markdown.push_str("OCR 未识别到可用文字内容。");
-        return markdown;
-    }
-
-    for (index, (page, text)) in pages.iter().enumerate() {
-        markdown.push_str(&format!("## 第{page}页\n\n"));
-        markdown.push_str(text.trim());
-        if index + 1 < pages.len() {
-            markdown.push_str("\n\n");
-        } else {
-            markdown.push('\n');
-        }
-    }
-
-    markdown
-}
-
-fn build_ocr_sections(pages: &[(usize, String)]) -> Vec<ManifestSection> {
-    if pages.is_empty() {
-        return vec![ManifestSection {
-            heading: Some("全文".to_string()),
-            anchor: "document-1".to_string(),
-            index: 0,
-        }];
-    }
-
-    pages
-        .iter()
-        .enumerate()
-        .map(|(index, (page, _))| ManifestSection {
-            heading: Some(format!("第{page}页")),
-            anchor: format!("page-{page}"),
-            index,
-        })
-        .collect()
+fn build_graph_enhance_payload_path(config: &AppConfig) -> Result<PathBuf, String> {
+    let temp_dir = config.data_dir.join("temp");
+    fs::create_dir_all(&temp_dir).map_err(|error| error.to_string())?;
+    Ok(temp_dir.join(format!("graph-enhance-{}.json", Uuid::new_v4())))
 }

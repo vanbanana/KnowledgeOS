@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from parsers import generate_pptx, parse_docx, parse_md_txt, parse_pdf, parse_pptx
+from parsers import enhance_graph, generate_pptx, parse_docx, parse_md_txt, parse_pdf, parse_pptx
 
 VERSION = "0.1.0"
 
@@ -35,6 +35,12 @@ def build_pptx(output_path: str, presentation_json: str) -> dict[str, Any]:
     return generate_pptx(output_path, presentation_json)
 
 
+def enhance_graph_file(graph_path: str) -> dict[str, Any]:
+    payload = json.loads(Path(graph_path).read_text(encoding="utf-8-sig"))
+    result = enhance_graph(payload)
+    return {"ok": True, "graph": result}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="KnowledgeOS parser worker")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -50,6 +56,9 @@ def main() -> None:
     pptx_parser.add_argument("--output-path", required=True)
     pptx_parser.add_argument("--presentation-json", required=True)
 
+    graph_parser = subparsers.add_parser("enhance_graph", help="增强图谱连通性和关系密度")
+    graph_parser.add_argument("--graph-path", required=True)
+
     args = parser.parse_args()
 
     if args.command == "health":
@@ -58,6 +67,11 @@ def main() -> None:
 
     if args.command == "generate_pptx":
         result = build_pptx(args.output_path, args.presentation_json)
+        print(json.dumps(result, ensure_ascii=False))
+        return
+
+    if args.command == "enhance_graph":
+        result = enhance_graph_file(args.graph_path)
         print(json.dumps(result, ensure_ascii=False))
         return
 

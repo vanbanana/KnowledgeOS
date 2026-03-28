@@ -8,6 +8,7 @@ import {
   getSubgraph,
   graphRagQuery,
   listStudioArtifacts,
+  queryGraphSource,
 } from "../lib/commands/client";
 import { MarkdownArticle } from "./MarkdownArticle";
 
@@ -57,39 +58,39 @@ interface StudioPreviewGraph {
   links: Array<{
     source: string;
     target: string;
+    relationType?: string;
+    confidence?: number;
   }>;
 }
 
-interface NodeRelationRow {
+interface RelationNarrativeRow {
   relationId: string;
   relationType: string;
+  categoryKey: string;
+  categoryLabel: string;
   directionLabel: "输入" | "输出";
+  peerNodeId: string;
+  peerNodeLabel: string;
+  question: string;
+  statement: string;
   sourceRef: string | null;
   confirmedByUser: boolean;
 }
 
-interface NodeRelationTypeGroup {
-  key: string;
-  categoryKey: string;
-  categoryLabel: string;
-  categoryOrder: number;
-  relationType: string;
-  rows: NodeRelationRow[];
-}
-
-interface NodeRelationPairGroup {
-  targetNodeId: string;
-  targetNodeLabel: string;
-  directionLabel: "输入" | "输出" | "双向";
-  relationCount: number;
-  typeGroups: NodeRelationTypeGroup[];
-}
-
-interface RelationCategoryTotal {
+interface RelationNarrativeGroup {
   key: string;
   label: string;
   order: number;
-  count: number;
+  relationType: string;
+  rows: RelationNarrativeRow[];
+}
+
+interface NodeSourceSnippet {
+  documentId?: string;
+  title: string;
+  snippet: string;
+  jumpTarget?: string;
+  score: number;
 }
 
 export function Graph3DWorkspace({
@@ -102,7 +103,6 @@ export function Graph3DWorkspace({
   const fitPaddingRef = useRef(72);
   const engineFitPendingRef = useRef(true);
   const canvasRegionRef = useRef<HTMLDivElement | null>(null);
-  const hostRef = useRef<HTMLDivElement | null>(null);
   const chatBodyRef = useRef<HTMLDivElement | null>(null);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const [size, setSize] = useState({ width: 1200, height: 720 });
@@ -112,6 +112,7 @@ export function Graph3DWorkspace({
   const [chatMessages, setChatMessages] = useState<GraphChatMessage[]>([]);
   const [chatDrawerOpen, setChatDrawerOpen] = useState(false);
   const [relationsDrawerOpen, setRelationsDrawerOpen] = useState(false);
+  const [relationsPanelExpanded, setRelationsPanelExpanded] = useState(false);
 
   const subgraphQuery = useQuery({
     queryKey: ["graph-3d", currentProject?.projectId],
@@ -170,16 +171,78 @@ export function Graph3DWorkspace({
 
   const hasLiveGraph = liveNodes.length > 0 && liveRelations.length > 0;
 
-  const displayNodes = useMemo<GraphViewportNode[]>(() => {
-    if (hasLiveGraph) {
-      return liveNodes.map((node) => ({
+  const liveDisplayNodes = useMemo<GraphViewportNode[]>(
+    () =>
+      liveNodes.map((node) => ({
         id: node.nodeId,
         nodeId: node.nodeId,
         label: node.label,
         nodeType: node.nodeType,
         sourceRef: node.sourceRef,
         weight: 1
-      }));
+      })),
+    [liveNodes]
+  );
+
+  const liveDisplayRelations = useMemo<GraphViewportLink[]>(
+    () =>
+      liveRelations.map((relation) => ({
+        relationId: relation.relationId,
+        source: relation.fromNodeId,
+        target: relation.toNodeId,
+        relationType: relation.relationType,
+        color: "#516584",
+        confirmedByUser: relation.confirmedByUser,
+        sourceRef: relation.sourceRef
+      })),
+    [liveRelations]
+  );
+
+  const scopedLiveGraph = useMemo(() => {
+    if (!hasLiveGraph) {
+      return { nodes: [] as GraphViewportNode[], relations: [] as GraphViewportLink[] };
+    }
+
+    const artifactId = fallbackArtifact?.artifactId ?? selectedArtifactId ?? null;
+    let relations = liveDisplayRelations;
+    if (artifactId) {
+      const scoped = relations.filter((item) => item.sourceRef === artifactId);
+      if (scoped.length > 0) {
+        relations = scoped;
+      }
+    }
+
+    const connectedNodeIds = new Set<string>();
+    for (const relation of relations) {
+      connectedNodeIds.add(relation.source);
+      connectedNodeIds.add(relation.target);
+    }
+
+    let nodes = liveDisplayNodes.filter((item) => connectedNodeIds.has(item.nodeId));
+    if (nodes.length === 0 || relations.length === 0) {
+      return {
+        nodes: liveDisplayNodes,
+        relations: liveDisplayRelations
+      };
+    }
+
+    const largestComponentNodeIds = pickLargestConnectedNodeIds(
+      nodes.map((item) => item.nodeId),
+      relations
+    );
+    if (largestComponentNodeIds.size >= 4) {
+      nodes = nodes.filter((item) => largestComponentNodeIds.has(item.nodeId));
+      relations = relations.filter(
+        (item) => largestComponentNodeIds.has(item.source) && largestComponentNodeIds.has(item.target)
+      );
+    }
+
+    return { nodes, relations };
+  }, [fallbackArtifact?.artifactId, hasLiveGraph, liveDisplayNodes, liveDisplayRelations, selectedArtifactId]);
+
+  const displayNodes = useMemo<GraphViewportNode[]>(() => {
+    if (hasLiveGraph) {
+      return scopedLiveGraph.nodes;
     }
     return (fallbackPreview?.nodes ?? []).map((node) => ({
       id: node.id,
@@ -189,30 +252,22 @@ export function Graph3DWorkspace({
       sourceRef: null,
       weight: node.weight
     }));
-  }, [fallbackPreview?.nodes, hasLiveGraph, liveNodes]);
+  }, [fallbackPreview?.nodes, hasLiveGraph, scopedLiveGraph.nodes]);
 
   const displayRelations = useMemo<GraphViewportLink[]>(() => {
     if (hasLiveGraph) {
-      return liveRelations.map((relation) => ({
-        relationId: relation.relationId,
-        source: relation.fromNodeId,
-        target: relation.toNodeId,
-        relationType: relation.relationType,
-        color: "#516584",
-        confirmedByUser: relation.confirmedByUser,
-        sourceRef: relation.sourceRef
-      }));
+      return scopedLiveGraph.relations;
     }
     return (fallbackPreview?.links ?? []).map((relation, index) => ({
       relationId: `preview-${relation.source}-${relation.target}-${index}`,
       source: relation.source,
       target: relation.target,
-      relationType: "关联",
+      relationType: normalizeRelationType(relation.relationType ?? "关联"),
       color: "#516584",
       confirmedByUser: true,
       sourceRef: null
     }));
-  }, [fallbackPreview?.links, hasLiveGraph, liveRelations]);
+  }, [fallbackPreview?.links, hasLiveGraph, scopedLiveGraph.relations]);
 
   const nodeLabelMap = useMemo(
     () => new Map(displayNodes.map((item) => [item.nodeId, item.label])),
@@ -245,21 +300,69 @@ export function Graph3DWorkspace({
   }, []);
 
   useEffect(() => {
-    const host = hostRef.current;
-    if (!host) {
+    const region = canvasRegionRef.current;
+    if (!region) {
       return;
     }
+
+    let frameId = 0;
+    let settleId = 0;
+
     const syncSize = () => {
-      setSize({
-        width: Math.max(320, Math.floor(host.clientWidth)),
-        height: Math.max(280, Math.floor(host.clientHeight))
+      const rect = region.getBoundingClientRect();
+      const nextWidth = Math.max(320, Math.floor(rect.width));
+      const nextHeight = Math.max(280, Math.floor(rect.height));
+      setSize((current) =>
+        current.width === nextWidth && current.height === nextHeight
+          ? current
+          : {
+              width: nextWidth,
+              height: nextHeight
+            }
+      );
+    };
+
+    const settleMeasure = () => {
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      if (settleId) {
+        window.clearTimeout(settleId);
+      }
+      syncSize();
+      frameId = window.requestAnimationFrame(() => {
+        syncSize();
+        settleId = window.setTimeout(syncSize, 140);
       });
     };
+
     syncSize();
-    const observer = new ResizeObserver(syncSize);
-    observer.observe(host);
-    return () => observer.disconnect();
-  }, []);
+    settleMeasure();
+    const observer = new ResizeObserver(settleMeasure);
+    observer.observe(region);
+    window.addEventListener("resize", settleMeasure);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", settleMeasure);
+      if (frameId) {
+        window.cancelAnimationFrame(frameId);
+      }
+      if (settleId) {
+        window.clearTimeout(settleId);
+      }
+    };
+  }, [viewportWidth, relationsDrawerOpen, chatDrawerOpen]);
+
+  useEffect(() => {
+    const graph = graphRef.current;
+    if (!graph) {
+      return;
+    }
+    graph.width?.(size.width);
+    graph.height?.(size.height);
+    graph.refresh?.();
+  }, [size.height, size.width]);
 
   const graphRagMutation = useMutation({
     mutationFn: async ({ question }: { requestId: string; question: string }) =>
@@ -361,151 +464,172 @@ export function Graph3DWorkspace({
 
   const relationInsights = useMemo(() => {
     const focusNodeId = currentNode?.nodeId ?? null;
+    const focusNodeLabel = currentNode?.label ?? "当前节点";
     if (!focusNodeId) {
       return {
-        pairs: [] as NodeRelationPairGroup[],
-        categoryTotals: [] as RelationCategoryTotal[],
+        groups: [] as RelationNarrativeGroup[],
+        prerequisiteSummary: "",
         total: 0
       };
     }
 
     const relationPool = displayRelations.filter((item) => item.source === focusNodeId || item.target === focusNodeId);
-    const pairMap = new Map<
-      string,
-      {
-        targetNodeId: string;
-        targetNodeLabel: string;
-        directions: Set<"输入" | "输出">;
-        typeGroupMap: Map<string, NodeRelationTypeGroup>;
-      }
-    >();
-    const categoryTotalMap = new Map<string, RelationCategoryTotal>();
+    const groupMap = new Map<string, RelationNarrativeGroup>();
+    const prerequisiteNodes = new Set<string>();
 
     for (const item of relationPool) {
       const directionLabel: "输入" | "输出" = item.source === focusNodeId ? "输出" : "输入";
-      const targetNodeId = directionLabel === "输出" ? item.target : item.source;
-      const targetNodeLabel = nodeLabelMap.get(targetNodeId) ?? targetNodeId;
-      const relationType = normalizeRelationType(item.relationType);
-      const category = classifyRelationType(relationType);
-      const typeGroupKey = `${category.key}::${relationType}`;
-
-      const existingCategoryTotal = categoryTotalMap.get(category.key);
-      if (existingCategoryTotal) {
-        existingCategoryTotal.count += 1;
-      } else {
-        categoryTotalMap.set(category.key, {
-          key: category.key,
-          label: category.label,
-          order: category.order,
-          count: 1
-        });
-      }
-
-      const existingPair = pairMap.get(targetNodeId);
-      if (!existingPair) {
-        pairMap.set(targetNodeId, {
-          targetNodeId,
-          targetNodeLabel,
-          directions: new Set([directionLabel]),
-          typeGroupMap: new Map([
-            [
-              typeGroupKey,
-              {
-                key: typeGroupKey,
-                categoryKey: category.key,
-                categoryLabel: category.label,
-                categoryOrder: category.order,
-                relationType,
-                rows: [
-                  {
-                    relationId: item.relationId,
-                    relationType,
-                    directionLabel,
-                    sourceRef: item.sourceRef,
-                    confirmedByUser: item.confirmedByUser
-                  }
-                ]
-              }
-            ]
-          ])
-        });
-        continue;
-      }
-
-      existingPair.directions.add(directionLabel);
-      const existingTypeGroup = existingPair.typeGroupMap.get(typeGroupKey);
-      if (existingTypeGroup) {
-        existingTypeGroup.rows.push({
-          relationId: item.relationId,
-          relationType,
+      const peerNodeId = directionLabel === "输出" ? item.target : item.source;
+      const peerNodeLabel = nodeLabelMap.get(peerNodeId) ?? peerNodeId;
+      const relationType = sanitizeRelationTypeForPair(
+        focusNodeLabel,
+        peerNodeLabel,
+        normalizeRelationType(item.relationType)
+      );
+      const relationCategory = classifyRelationType(relationType);
+      const groupKey = relationCategory.key;
+      const existingGroup = groupMap.get(groupKey);
+      const row: RelationNarrativeRow = {
+        relationId: item.relationId,
+        relationType: relationCategory.canonicalType,
+        categoryKey: relationCategory.key,
+        categoryLabel: relationCategory.label,
+        directionLabel,
+        peerNodeId,
+        peerNodeLabel,
+        question: buildRelationQuestion({
+          focusNodeLabel,
+          peerNodeLabel,
           directionLabel,
-          sourceRef: item.sourceRef,
-          confirmedByUser: item.confirmedByUser
-        });
+          relationType: relationCategory.canonicalType
+        }),
+        statement: buildRelationStatement({
+          focusNodeLabel,
+          peerNodeLabel,
+          directionLabel,
+          relationType: relationCategory.canonicalType
+        }),
+        sourceRef: item.sourceRef,
+        confirmedByUser: item.confirmedByUser
+      };
+
+      if (relationCategory.canonicalType === "前置依赖" && directionLabel === "输入") {
+        prerequisiteNodes.add(peerNodeLabel);
+      }
+
+      if (existingGroup) {
+        existingGroup.rows.push(row);
       } else {
-        existingPair.typeGroupMap.set(typeGroupKey, {
-          key: typeGroupKey,
-          categoryKey: category.key,
-          categoryLabel: category.label,
-          categoryOrder: category.order,
-          relationType,
-          rows: [
-            {
-              relationId: item.relationId,
-              relationType,
-              directionLabel,
-              sourceRef: item.sourceRef,
-              confirmedByUser: item.confirmedByUser
-            }
-          ]
+        groupMap.set(groupKey, {
+          key: groupKey,
+          label: relationCategory.label,
+          order: relationCategory.order,
+          relationType: relationCategory.canonicalType,
+          rows: [row]
         });
       }
     }
 
-    const pairs = Array.from(pairMap.values())
-      .map((group): NodeRelationPairGroup => {
-        const typeGroups = Array.from(group.typeGroupMap.values())
-          .sort((a, b) => {
-            if (a.categoryOrder !== b.categoryOrder) {
-              return a.categoryOrder - b.categoryOrder;
-            }
-            if (b.rows.length !== a.rows.length) {
-              return b.rows.length - a.rows.length;
-            }
-            return a.relationType.localeCompare(b.relationType, "zh-Hans-CN");
-          });
-        const relationCount = typeGroups.reduce((total, typeGroup) => total + typeGroup.rows.length, 0);
-        const hasInput = group.directions.has("输入");
-        const hasOutput = group.directions.has("输出");
-        const directionLabel: "输入" | "输出" | "双向" = hasInput && hasOutput ? "双向" : hasOutput ? "输出" : "输入";
-        return {
-          targetNodeId: group.targetNodeId,
-          targetNodeLabel: group.targetNodeLabel,
-          directionLabel,
-          relationCount,
-          typeGroups
-        };
-      })
+    const groups = Array.from(groupMap.values())
+      .map((group) => ({
+        ...group,
+        rows: [...group.rows].sort((left, right) => {
+          if (left.peerNodeLabel !== right.peerNodeLabel) {
+            return left.peerNodeLabel.localeCompare(right.peerNodeLabel, "zh-Hans-CN");
+          }
+          if (left.directionLabel !== right.directionLabel) {
+            return left.directionLabel.localeCompare(right.directionLabel, "zh-Hans-CN");
+          }
+          return left.relationId.localeCompare(right.relationId, "zh-Hans-CN");
+        })
+      }))
       .sort((a, b) => {
-        if (b.relationCount !== a.relationCount) {
-          return b.relationCount - a.relationCount;
+        if (a.order !== b.order) {
+          return a.order - b.order;
         }
-        return a.targetNodeLabel.localeCompare(b.targetNodeLabel, "zh-Hans-CN");
+        if (b.rows.length !== a.rows.length) {
+          return b.rows.length - a.rows.length;
+        }
+        return a.label.localeCompare(b.label, "zh-Hans-CN");
       });
 
-    const categoryTotals = Array.from(categoryTotalMap.values()).sort((a, b) => {
-      if (a.order !== b.order) {
-        return a.order - b.order;
-      }
-      return b.count - a.count;
-    });
+    const prerequisiteSummary = prerequisiteNodes.size > 0
+      ? `前置知识：${Array.from(prerequisiteNodes).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")).join("、")}`
+      : "";
 
     return {
-      pairs,
-      categoryTotals,
+      groups,
+      prerequisiteSummary,
       total: relationPool.length
     };
-  }, [currentNode?.nodeId, displayRelations, nodeLabelMap]);
+  }, [currentNode?.label, currentNode?.nodeId, displayRelations, nodeLabelMap]);
+
+  const relationSummaryChips = useMemo(
+    () =>
+      relationInsights.groups.map((group) => ({
+        key: group.key,
+        label: group.label,
+        count: group.rows.length
+      })),
+    [relationInsights.groups]
+  );
+
+  const nodeSourceQuery = useQuery({
+    queryKey: [
+      "graph-3d-node-source",
+      currentProject?.projectId,
+      fallbackArtifact?.artifactId,
+      currentNode?.nodeId,
+      currentNode?.label
+    ],
+    enabled: Boolean(currentProject?.projectId && currentNode?.label),
+    queryFn: async (): Promise<NodeSourceSnippet[]> => {
+      const keyword = (currentNode?.label ?? "").trim();
+      if (!keyword) {
+        return [];
+      }
+      const sourceResult = await queryGraphSource({
+        projectId: currentProject!.projectId,
+        artifactId: fallbackArtifact?.artifactId ?? selectedArtifactId ?? undefined,
+        keyword,
+        limit: 6
+      });
+      if (sourceResult.snippets.length > 0) {
+        return sourceResult.snippets.map((item) => ({
+          documentId: item.documentId,
+          title: item.title,
+          snippet: item.snippet,
+          score: item.score
+        }));
+      }
+
+      const rag = await graphRagQuery({
+        projectId: currentProject!.projectId,
+        query: `请给出与「${keyword}」直接相关的原文片段`,
+        focusNodeId: currentNode?.nodeId ?? undefined,
+        history: []
+      });
+      const dedup = new Set<string>();
+      const fallback = [] as NodeSourceSnippet[];
+      for (const evidence of rag.evidence) {
+        const key = `${evidence.title}-${evidence.snippet}`.trim();
+        if (!key || dedup.has(key)) {
+          continue;
+        }
+        dedup.add(key);
+        fallback.push({
+          title: evidence.title || "图谱证据",
+          snippet: evidence.snippet,
+          jumpTarget: evidence.blockId ?? undefined,
+          score: 0.1
+        });
+        if (fallback.length >= 4) {
+          break;
+        }
+      }
+      return fallback;
+    }
+  });
 
   const layoutMetrics = useMemo(() => {
     const totalWidth = Math.max(320, viewportWidth);
@@ -561,7 +685,9 @@ export function Graph3DWorkspace({
   useEffect(() => {
     if (layoutMetrics.showRightPanel) {
       setRelationsDrawerOpen(false);
+      return;
     }
+    setRelationsPanelExpanded(false);
   }, [layoutMetrics.showRightPanel]);
 
   useEffect(() => {
@@ -671,6 +797,50 @@ export function Graph3DWorkspace({
                 </button>
               ) : null}
 
+              {layoutMetrics.showRightPanel && !relationsPanelExpanded ? (
+                <button
+                  className="graph-3d-chat-toggle graph-3d-chat-toggle-right graph-3d-relations-collapsed-toggle"
+                  onClick={() => setRelationsPanelExpanded(true)}
+                >
+                  打开关系
+                </button>
+              ) : null}
+
+              {layoutMetrics.showRightPanel && !relationsPanelExpanded ? (
+                <aside className="graph-3d-overlay graph-3d-overlay-source-inline">
+                  <div className="graph-3d-source-preview-panel">
+                    <div className="graph-3d-source-preview-head">
+                      <div className="graph-3d-source-preview-eyebrow">原文预览</div>
+                      <div className="graph-3d-source-preview-title">{currentNode?.label ?? "未选择节点"}</div>
+                    </div>
+                    <div className="graph-3d-source-preview-body">
+                      {nodeSourceQuery.isFetching ? (
+                        <div className="graph-3d-source-preview-empty">正在加载原文片段…</div>
+                      ) : nodeSourceQuery.data && nodeSourceQuery.data.length > 0 ? (
+                        <div className="graph-3d-source-preview-list">
+                          {nodeSourceQuery.data.map((row) => (
+                            <article key={`${row.title}-${row.snippet.slice(0, 36)}`} className="graph-3d-source-preview-item">
+                              <div className="graph-3d-source-preview-item-title">{row.title || "原文片段"}</div>
+                              <div className="graph-3d-source-preview-item-snippet">{row.snippet}</div>
+                              {row.jumpTarget ? (
+                                <button
+                                  className="graph-3d-table-action"
+                                  onClick={() => onJumpToBlock(row.jumpTarget!)}
+                                >
+                                  打开原文位置
+                                </button>
+                              ) : null}
+                            </article>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="graph-3d-source-preview-empty">当前节点暂无可展示的原文片段。</div>
+                      )}
+                    </div>
+                  </div>
+                </aside>
+              ) : null}
+
               {(!layoutMetrics.collapseChat || chatDrawerOpen) ? (
               <aside className={layoutMetrics.collapseChat ? "graph-3d-overlay graph-3d-overlay-left graph-3d-overlay-left-drawer" : "graph-3d-overlay graph-3d-overlay-left"}>
                 <div className="chat-pane graph-3d-chat-pane">
@@ -762,7 +932,7 @@ export function Graph3DWorkspace({
               </aside>
               ) : null}
 
-              <div ref={hostRef} className="graph-3d-shell graph-3d-shell-stage">
+              <div className="graph-3d-shell graph-3d-shell-stage">
                 <ForceGraph3D
                   ref={graphRef}
                   graphData={graphData as any}
@@ -802,7 +972,7 @@ export function Graph3DWorkspace({
                   }}
                   linkWidth={(link: GraphViewportLink) => {
                     if (!focusGraphMeta) {
-                      return 1.2;
+                      return 1.8;
                     }
                     return focusGraphMeta.relationIds.has(link.relationId) ? 2.6 : 0.6;
                   }}
@@ -815,7 +985,7 @@ export function Graph3DWorkspace({
                   nodeThreeObject={(node: GraphViewportNode) => buildNodeLabel(node, selectedNodeId, focusGraphMeta)}
                   linkColor={(link: GraphViewportLink) => {
                     if (!focusGraphMeta) {
-                      return "rgba(81, 101, 132, 0.32)";
+                      return "rgba(143, 189, 255, 0.68)";
                     }
                     return focusGraphMeta.relationIds.has(link.relationId)
                       ? "rgba(173, 208, 255, 0.88)"
@@ -860,7 +1030,7 @@ export function Graph3DWorkspace({
                 />
               </div>
 
-              {layoutMetrics.showRightPanel || relationsDrawerOpen ? (
+              {(layoutMetrics.showRightPanel ? relationsPanelExpanded : relationsDrawerOpen) ? (
               <aside className={layoutMetrics.showRightPanel ? "graph-3d-overlay graph-3d-overlay-right" : "graph-3d-overlay graph-3d-overlay-right graph-3d-overlay-right-drawer"}>
                 <div className="graph-3d-relations-panel">
                   <div className="graph-3d-relations-header">
@@ -887,76 +1057,65 @@ export function Graph3DWorkspace({
                         <div className="document-status-chip">{displayRelations.length} 条关系</div>
                       </div>
                     </div>
-                    {currentNode?.sourceRef ? (
+                    {layoutMetrics.showRightPanel ? (
                       <button
-                        className="small-button graph-3d-source-button"
-                        onClick={() => onJumpToBlock(currentNode.sourceRef!)}
+                        className="small-button graph-3d-relations-collapse-button"
+                        onClick={() => setRelationsPanelExpanded(false)}
                       >
-                        查看来源
+                        收起关系
                       </button>
                     ) : null}
                   </div>
 
                   <div className="graph-3d-relations-table-shell">
-                    {relationInsights.pairs.length > 0 ? (
+                    {relationInsights.groups.length > 0 ? (
                       <>
-                        <div className="graph-3d-relations-category-summary">
-                          {relationInsights.categoryTotals.map((item) => (
-                            <div key={item.key} className={`graph-3d-relations-category-chip graph-3d-relations-category-chip-${item.key}`}>
+                        <div className="graph-3d-relations-category-summary graph-3d-relations-category-summary-natural">
+                          {relationSummaryChips.map((item) => (
+                            <div key={item.key} className="graph-3d-relations-category-chip graph-3d-relations-category-chip-natural">
                               <span>{item.label}</span>
-                              <strong>{item.count}</strong>
+                              <strong>{item.count} 条</strong>
                             </div>
                           ))}
                         </div>
 
-                        <div className="graph-3d-relations-group-list">
-                          {relationInsights.pairs.map((pair) => (
-                            <section key={pair.targetNodeId} className="graph-3d-relations-group-card">
-                              <div className="graph-3d-relations-group-head">
-                                <button
-                                  className="graph-3d-node-link graph-3d-node-link-strong"
-                                  onClick={() => setSelectedNodeId(pair.targetNodeId)}
-                                >
-                                  {pair.targetNodeLabel}
-                                </button>
-                                <div className="graph-3d-relations-group-meta">
-                                  <span className="graph-3d-relations-group-direction">{pair.directionLabel}</span>
-                                  <span>{pair.relationCount} 条</span>
-                                </div>
-                              </div>
+                        {relationInsights.prerequisiteSummary ? (
+                          <div className="graph-3d-prerequisite-summary">
+                            {relationInsights.prerequisiteSummary}
+                          </div>
+                        ) : null}
 
-                              <div className="graph-3d-relations-type-list">
-                                {pair.typeGroups.map((typeGroup) => (
-                                  <details key={typeGroup.key} className="graph-3d-relations-type-card" open={typeGroup.rows.length <= 2}>
-                                    <summary className="graph-3d-relations-type-summary">
-                                      <span className={`graph-3d-relations-type-category graph-3d-relations-type-category-${typeGroup.categoryKey}`}>
-                                        {typeGroup.categoryLabel}
-                                      </span>
-                                      <span className="graph-3d-relations-type-name">{typeGroup.relationType}</span>
-                                      <span className="graph-3d-relations-type-count">{typeGroup.rows.length} 条</span>
-                                    </summary>
-                                    <div className="graph-3d-relations-item-list">
-                                      {typeGroup.rows.map((row) => (
-                                        <div key={row.relationId} className="graph-3d-relations-item-row">
-                                          <span className="graph-3d-relations-item-direction">{row.directionLabel}</span>
-                                          <span className="graph-3d-relations-item-status">{row.confirmedByUser ? "已确认" : "待确认"}</span>
-                                          {row.sourceRef ? (
-                                            <button
-                                              className="graph-3d-table-action"
-                                              onClick={() => onJumpToBlock(row.sourceRef!)}
-                                            >
-                                              查看来源
-                                            </button>
-                                          ) : (
-                                            <span className="graph-3d-table-muted">无来源</span>
-                                          )}
-                                        </div>
-                                      ))}
+                        <div className="graph-3d-relations-group-list">
+                          {relationInsights.groups.map((group, groupIndex) => (
+                            <details
+                              key={group.key}
+                              className="graph-3d-relations-type-card graph-3d-relations-type-card-natural"
+                              open={groupIndex === 0}
+                            >
+                              <summary className="graph-3d-relations-type-summary graph-3d-relations-type-summary-natural">
+                                <span className="graph-3d-relations-type-name">{group.label}</span>
+                                <span className="graph-3d-relations-type-count">{group.rows.length} 条</span>
+                              </summary>
+                              <div className="graph-3d-relations-natural-list">
+                                {group.rows.map((row) => (
+                                  <article key={row.relationId} className="graph-3d-relations-natural-item">
+                                    <div className="graph-3d-relations-natural-question">{row.question}</div>
+                                    <div className="graph-3d-relations-natural-answer">{row.statement}</div>
+                                    <div className="graph-3d-relations-natural-meta">
+                                      <span className="graph-3d-relations-item-direction">{row.directionLabel}</span>
+                                      <span className="graph-3d-relations-item-status">{row.confirmedByUser ? "已确认" : "待确认"}</span>
+                                      <button
+                                        className="graph-3d-table-action"
+                                        onClick={() => setSelectedNodeId(row.peerNodeId)}
+                                      >
+                                        定位节点
+                                      </button>
+                                      <span className="graph-3d-table-muted">来源：图谱生成链路</span>
                                     </div>
-                                  </details>
+                                  </article>
                                 ))}
                               </div>
-                            </section>
+                            </details>
                           ))}
                         </div>
                       </>
@@ -1034,12 +1193,55 @@ function parseStudioGraphPreview(previewJson: string | null) {
         .filter((item) => Boolean(item?.source) && Boolean(item?.target))
         .map((item) => ({
           source: item.source,
-          target: item.target
+          target: item.target,
+          relationType: item.relationType
         }))
     };
   } catch {
     return null;
   }
+}
+
+function pickLargestConnectedNodeIds(nodeIds: string[], relations: GraphViewportLink[]) {
+  const adjacency = new Map<string, string[]>();
+  for (const nodeId of nodeIds) {
+    adjacency.set(nodeId, []);
+  }
+  for (const relation of relations) {
+    if (!adjacency.has(relation.source) || !adjacency.has(relation.target)) {
+      continue;
+    }
+    adjacency.get(relation.source)!.push(relation.target);
+    adjacency.get(relation.target)!.push(relation.source);
+  }
+
+  const visited = new Set<string>();
+  let largest = new Set<string>();
+
+  for (const nodeId of nodeIds) {
+    if (visited.has(nodeId)) {
+      continue;
+    }
+    const stack = [nodeId];
+    const component = new Set<string>();
+    visited.add(nodeId);
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      component.add(current);
+      for (const next of adjacency.get(current) ?? []) {
+        if (visited.has(next)) {
+          continue;
+        }
+        visited.add(next);
+        stack.push(next);
+      }
+    }
+    if (component.size > largest.size) {
+      largest = component;
+    }
+  }
+
+  return largest;
 }
 
 function buildRequestId() {
@@ -1051,20 +1253,157 @@ function normalizeRelationType(value: string) {
   return normalized.length > 0 ? normalized : "关联";
 }
 
-function classifyRelationType(value: string) {
-  const lowered = value.toLowerCase();
+function sanitizeRelationTypeForPair(leftLabel: string, rightLabel: string, relationType: string) {
+  const normalized = normalizeRelationType(relationType);
+  if (normalized !== "实现/调用") {
+    return normalized;
+  }
+  if (isCallableLabel(leftLabel) && isCallableLabel(rightLabel)) {
+    return normalized;
+  }
+  if (isConstraintLabel(leftLabel) || isConstraintLabel(rightLabel)) {
+    return "约束/边界";
+  }
+  if (isConfusionLabel(leftLabel) || isConfusionLabel(rightLabel)) {
+    return "易混淆";
+  }
+  if (isPrerequisiteLabel(leftLabel) || isPrerequisiteLabel(rightLabel)) {
+    return "前置依赖";
+  }
+  if (isClassMechanismLabel(leftLabel) || isClassMechanismLabel(rightLabel)) {
+    return "包含";
+  }
+  return "相关主题";
+}
 
-  if (/(因果|导致|引发|影响|依赖|先于|后于|before|after|cause|effect|depend|trigger|flow)/i.test(value) || /(cause|effect|depend|trigger|before|after|flow)/i.test(lowered)) {
-    return { key: "causal", label: "因果/时序", order: 1 };
+function classifyRelationType(value: string) {
+  const normalized = normalizeRelationType(value);
+  if (/(前置|依赖|先于|准备|基础)/.test(normalized)) {
+    return { key: "prerequisite", label: "前置知识关系", order: 1, canonicalType: "前置依赖" };
   }
-  if (/(组成|包含|隶属|层级|上下位|父子|章节|结构|部分|part|contain|belongs|parent|child|hierarchy)/i.test(value) || /(part|contain|belongs|parent|child|hierarchy)/i.test(lowered)) {
-    return { key: "structural", label: "结构关系", order: 2 };
+  if (/(包含|组成|隶属|层级|父子|章节|结构|部分)/.test(normalized)) {
+    return { key: "containment", label: "结构组成关系", order: 2, canonicalType: "包含" };
   }
-  if (/(证据|引用|出处|来源|证明|支持|实验|文献|source|cite|evidence|support|prove|reference)/i.test(value) || /(source|cite|evidence|support|prove|reference)/i.test(lowered)) {
-    return { key: "evidence", label: "证据关系", order: 3 };
+  if (/(并列|对比|区别|差异)/.test(normalized)) {
+    return { key: "comparison", label: "并列对比关系", order: 3, canonicalType: "并列对比" };
   }
-  if (/(同义|近义|相关|语义|映射|对应|话题|概念|is_a|related|similar|semantic|mapping|topic|concept)/i.test(value) || /(related|similar|semantic|mapping|topic|concept|is_a)/i.test(lowered)) {
-    return { key: "semantic", label: "语义关系", order: 4 };
+  if (/(实现|调用|机制|接口)/.test(normalized)) {
+    return { key: "implementation", label: "实现调用关系", order: 4, canonicalType: "实现/调用" };
   }
-  return { key: "other", label: "其他关系", order: 5 };
+  if (/(输入|输出|参数|返回|数据流)/.test(normalized)) {
+    return { key: "io", label: "输入输出关系", order: 5, canonicalType: "输入输出" };
+  }
+  if (/(混淆|误区|易错)/.test(normalized)) {
+    return { key: "confusion", label: "易混淆关系", order: 6, canonicalType: "易混淆" };
+  }
+  if (/(应用|场景|实战|工程)/.test(normalized)) {
+    return { key: "application", label: "应用场景关系", order: 7, canonicalType: "应用场景" };
+  }
+  if (/(约束|边界|限制|风险)/.test(normalized)) {
+    return { key: "constraint", label: "约束边界关系", order: 8, canonicalType: "约束/边界" };
+  }
+  if (/(示例|例子|样例|案例)/.test(normalized)) {
+    return { key: "example", label: "示例关系", order: 9, canonicalType: "示例" };
+  }
+  if (/(相关|关联)/.test(normalized)) {
+    return { key: "topic", label: "相关主题关系", order: 10, canonicalType: "相关主题" };
+  }
+  return {
+    key: `other-${normalized}`,
+    label: `${normalized}关系`,
+    order: 99,
+    canonicalType: normalized
+  };
+}
+
+function buildRelationQuestion(input: {
+  focusNodeLabel: string;
+  peerNodeLabel: string;
+  relationType: string;
+  directionLabel: "输入" | "输出";
+}) {
+  const { focusNodeLabel, peerNodeLabel, relationType, directionLabel } = input;
+  if (relationType === "前置依赖") {
+    return directionLabel === "输入"
+      ? `「${focusNodeLabel}」的前置知识是什么？`
+      : `「${peerNodeLabel}」的前置知识是什么？`;
+  }
+  if (relationType === "并列对比") {
+    return `「${focusNodeLabel}」和「${peerNodeLabel}」的区别是什么？`;
+  }
+  if (relationType === "易混淆") {
+    return `「${focusNodeLabel}」和「${peerNodeLabel}」容易混淆在哪里？`;
+  }
+  return `「${focusNodeLabel}」和「${peerNodeLabel}」是什么关系？`;
+}
+
+function buildRelationStatement(input: {
+  focusNodeLabel: string;
+  peerNodeLabel: string;
+  relationType: string;
+  directionLabel: "输入" | "输出";
+}) {
+  const { focusNodeLabel, peerNodeLabel, relationType, directionLabel } = input;
+  if (relationType === "前置依赖") {
+    return directionLabel === "输入"
+      ? `结论：学习「${focusNodeLabel}」前，建议先掌握「${peerNodeLabel}」。`
+      : `结论：学习「${peerNodeLabel}」前，建议先掌握「${focusNodeLabel}」。`;
+  }
+  if (relationType === "包含") {
+    return `结论：「${focusNodeLabel}」与「${peerNodeLabel}」存在包含关系，表示二者处于同一结构层级。`;
+  }
+  if (relationType === "并列对比") {
+    return `结论：「${focusNodeLabel}」与「${peerNodeLabel}」是并列概念，适合放在一起对比理解。`;
+  }
+  if (relationType === "实现/调用") {
+    return `结论：「${focusNodeLabel}」与「${peerNodeLabel}」存在实现/调用关系，通常发生在函数、方法或接口层面。`;
+  }
+  if (relationType === "输入输出") {
+    return directionLabel === "输入"
+      ? `结论：「${peerNodeLabel}」的输出会流向「${focusNodeLabel}」。`
+      : `结论：「${focusNodeLabel}」的输出会流向「${peerNodeLabel}」。`;
+  }
+  if (relationType === "易混淆") {
+    return `结论：「${focusNodeLabel}」与「${peerNodeLabel}」容易混淆，建议重点区分定义、边界和典型用法。`;
+  }
+  if (relationType === "应用场景") {
+    return `结论：「${focusNodeLabel}」与「${peerNodeLabel}」存在应用场景关联，可在同一类任务中联合使用。`;
+  }
+  if (relationType === "约束/边界") {
+    return directionLabel === "输入"
+      ? `结论：「${peerNodeLabel}」对「${focusNodeLabel}」形成约束边界。`
+      : `结论：「${focusNodeLabel}」对「${peerNodeLabel}」形成约束边界。`;
+  }
+  if (relationType === "示例") {
+    return `结论：「${focusNodeLabel}」与「${peerNodeLabel}」构成示例关系，可通过实例加深理解。`;
+  }
+  if (relationType === "相关主题") {
+    return `结论：「${focusNodeLabel}」与「${peerNodeLabel}」属于相关主题，建议结合上下文对照学习。`;
+  }
+  return `结论：「${focusNodeLabel}」与「${peerNodeLabel}」存在「${relationType}」关系。`;
+}
+
+function containsAny(text: string, keywords: string[]) {
+  const value = text.toLowerCase();
+  return keywords.some((keyword) => value.includes(keyword));
+}
+
+function isCallableLabel(value: string) {
+  return containsAny(value, ["函数", "方法", "接口", "api", "调用", "回调", "operator", "操作符"]);
+}
+
+function isClassMechanismLabel(value: string) {
+  return containsAny(value, ["类机制", "对象模型", "模板机制", "面向对象", "类"]);
+}
+
+function isConstraintLabel(value: string) {
+  return containsAny(value, ["不能", "不可", "限制", "约束", "边界", "风险", "破坏"]);
+}
+
+function isConfusionLabel(value: string) {
+  return containsAny(value, ["混淆", "误区", "易错", "易混"]);
+}
+
+function isPrerequisiteLabel(value: string) {
+  return containsAny(value, ["前置", "基础", "准备", "先学", "依赖"]);
 }

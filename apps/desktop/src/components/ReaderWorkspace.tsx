@@ -138,6 +138,8 @@ export function ReaderWorkspace({
   const [paperExplainStatusesByDocument, setPaperExplainStatusesByDocument] = useState<Record<string, Record<string, "idle" | "running" | "completed" | "failed">>>({});
   const [paperExplainOverridesByDocument, setPaperExplainOverridesByDocument] = useState<Record<string, Record<string, BlockExplanation>>>({});
   const currentRequestIdRef = useRef<string | null>(null);
+  const chatChunkBufferRef = useRef<Record<string, string>>({});
+  const chatChunkFlushTimerRef = useRef<number | null>(null);
   const chatInputRef = useRef<HTMLTextAreaElement | null>(null);
   const chatBodyRef = useRef<HTMLDivElement | null>(null);
   const blockStackRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -267,6 +269,45 @@ export function ReaderWorkspace({
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
+    const flushBufferedChunks = () => {
+      chatChunkFlushTimerRef.current = null;
+      const buffered = chatChunkBufferRef.current;
+      const entries = Object.entries(buffered).filter(([, chunk]) => chunk.length > 0);
+      if (entries.length === 0) {
+        return;
+      }
+      chatChunkBufferRef.current = {};
+      setChatMessages((current) =>
+        current.map((message) => {
+          for (const [requestId, chunk] of entries) {
+            if (message.id === `assistant-${requestId}`) {
+              return { ...message, content: `${message.content}${chunk}`, isStreaming: true };
+            }
+          }
+          return message;
+        })
+      );
+    };
+    const scheduleChunkFlush = () => {
+      if (chatChunkFlushTimerRef.current !== null) {
+        return;
+      }
+      chatChunkFlushTimerRef.current = window.setTimeout(flushBufferedChunks, 24);
+    };
+    const flushRequestChunk = (requestId: string) => {
+      const chunk = chatChunkBufferRef.current[requestId];
+      if (!chunk) {
+        return;
+      }
+      delete chatChunkBufferRef.current[requestId];
+      setChatMessages((current) =>
+        current.map((message) =>
+          message.id === `assistant-${requestId}`
+            ? { ...message, content: `${message.content}${chunk}`, isStreaming: true }
+            : message
+        )
+      );
+    };
 
     void listen<ChatStreamEventPayload>("reader-chat-stream", (event) => {
       if (disposed) {
@@ -279,6 +320,7 @@ export function ReaderWorkspace({
       }
 
       if (payload.error) {
+        flushRequestChunk(payload.requestId);
         setChatMessages((current) =>
           current.map((message) =>
             message.id === `assistant-${payload.requestId}`
@@ -291,16 +333,12 @@ export function ReaderWorkspace({
       }
 
       if (payload.chunk) {
-        setChatMessages((current) =>
-          current.map((message) =>
-            message.id === `assistant-${payload.requestId}`
-              ? { ...message, content: `${message.content}${payload.chunk}`, isStreaming: true }
-              : message
-          )
-        );
+        chatChunkBufferRef.current[payload.requestId] = `${chatChunkBufferRef.current[payload.requestId] ?? ""}${payload.chunk}`;
+        scheduleChunkFlush();
       }
 
       if (payload.done) {
+        flushRequestChunk(payload.requestId);
         setChatMessages((current) =>
           current.map((message) =>
             message.id === `assistant-${payload.requestId}`
@@ -316,6 +354,11 @@ export function ReaderWorkspace({
 
     return () => {
       disposed = true;
+      if (chatChunkFlushTimerRef.current !== null) {
+        window.clearTimeout(chatChunkFlushTimerRef.current);
+        chatChunkFlushTimerRef.current = null;
+      }
+      chatChunkBufferRef.current = {};
       unlisten?.();
     };
   }, []);
@@ -392,18 +435,15 @@ export function ReaderWorkspace({
         return status === "planning" || status === "previewing" || status === "executing";
       });
 
-    const scrollBehavior: ScrollBehavior = hasStreaming ? "smooth" : "auto";
+    if (hasStreaming) {
+      body.scrollTop = body.scrollHeight;
+      return;
+    }
     window.requestAnimationFrame(() => {
       body.scrollTo({
         top: body.scrollHeight,
-        behavior: scrollBehavior
+        behavior: "smooth"
       });
-      window.setTimeout(() => {
-        body.scrollTo({
-          top: body.scrollHeight,
-          behavior: "auto"
-        });
-      }, 40);
     });
   }, [chatMessages]);
 

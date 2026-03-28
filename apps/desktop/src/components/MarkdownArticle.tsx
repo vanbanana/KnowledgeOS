@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import type { Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -34,16 +35,24 @@ const markdownComponents: Components = {
   }
 };
 
-export function MarkdownArticle({ content, className }: MarkdownArticleProps) {
-  return (
-    <article className={className ? `markdown-article ${className}` : "markdown-article"}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
-        components={markdownComponents}
-      >
-        {content}
-      </ReactMarkdown>
-    </article>
-  );
-}
+const markdownRemarkPlugins = [remarkGfm];
+const markdownRehypePlugins = [rehypeHighlight];
+
+export const MarkdownArticle = memo(
+  function MarkdownArticle({ content, className }: MarkdownArticleProps) {
+    return (
+      <article className={className ? `markdown-article ${className}` : "markdown-article"}>
+        <ReactMarkdown
+          remarkPlugins={markdownRemarkPlugins}
+          rehypePlugins={markdownRehypePlugins}
+          components={markdownComponents}
+        >
+          {content}
+        </ReactMarkdown>
+      </article>
+    );
+  },
+  (prevProps, nextProps) =>
+    prevProps.content === nextProps.content
+    && prevProps.className === nextProps.className
+);

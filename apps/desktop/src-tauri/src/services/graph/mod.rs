@@ -58,17 +58,20 @@ pub struct UpsertRelationInput<'a> {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StudioPreviewPayload {
     graph: Option<StudioPreviewGraph>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StudioPreviewGraph {
     nodes: Vec<StudioPreviewNode>,
     links: Vec<StudioPreviewLink>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StudioPreviewNode {
     id: String,
     label: String,
@@ -76,9 +79,12 @@ struct StudioPreviewNode {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StudioPreviewLink {
     source: String,
     target: String,
+    relation_type: Option<String>,
+    confidence: Option<f64>,
 }
 
 pub fn sync_card_node(
@@ -239,13 +245,15 @@ pub fn ensure_graph_seeded_from_studio_preview(
         .into_iter()
         .map(|node| (node.label.to_lowercase(), node.node_id))
         .collect::<std::collections::HashMap<_, _>>();
+    let mut node_id_by_preview_id = std::collections::HashMap::new();
 
-    for node in graph.nodes {
+    for node in &graph.nodes {
         let normalized_label = node.label.trim().to_lowercase();
         if normalized_label.is_empty() {
             continue;
         }
-        if node_id_by_label.contains_key(&normalized_label) {
+        if let Some(existing_node_id) = node_id_by_label.get(&normalized_label).cloned() {
+            node_id_by_preview_id.insert(node.id.clone(), existing_node_id);
             continue;
         }
         let node_id = Uuid::new_v4().to_string();
@@ -265,37 +273,54 @@ pub fn ensure_graph_seeded_from_studio_preview(
                     node_id,
                     project_id,
                     "concept",
-                    node.label.trim(),
-                    metadata_json,
-                    now,
-                    now
+                     node.label.trim(),
+                     metadata_json,
+                     now,
+                     now
                 ],
             )
             .map_err(|error| error.to_string())?;
-        node_id_by_label.insert(normalized_label, node_id);
+        node_id_by_label.insert(normalized_label, node_id.clone());
+        node_id_by_preview_id.insert(node.id.clone(), node_id);
     }
 
     for link in graph.links {
-        let from_node_id = node_id_by_label
-            .get(&link.source.trim().to_lowercase())
-            .cloned();
-        let to_node_id = node_id_by_label
-            .get(&link.target.trim().to_lowercase())
-            .cloned();
+        let from_node_id = node_id_by_preview_id
+            .get(link.source.trim())
+            .cloned()
+            .or_else(|| {
+                node_id_by_label
+                    .get(&link.source.trim().to_lowercase())
+                    .cloned()
+            });
+        let to_node_id = node_id_by_preview_id
+            .get(link.target.trim())
+            .cloned()
+            .or_else(|| {
+                node_id_by_label
+                    .get(&link.target.trim().to_lowercase())
+                    .cloned()
+            });
         let (Some(from_node_id), Some(to_node_id)) = (from_node_id, to_node_id) else {
             continue;
         };
         if from_node_id == to_node_id {
             continue;
         }
+        let relation_type = link
+            .relation_type
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("关联");
         let _ = upsert_relation(
             connection,
             UpsertRelationInput {
                 project_id,
                 from_node_id: &from_node_id,
                 to_node_id: &to_node_id,
-                relation_type: "关联",
-                confidence: Some(0.88),
+                relation_type,
+                confidence: Some(link.confidence.unwrap_or(0.88)),
                 origin_type: "artifact",
                 source_ref: Some(&artifact_id),
                 confirmed_by_user: true,

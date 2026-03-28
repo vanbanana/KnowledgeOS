@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -12,9 +12,10 @@ use crate::ai::model_adapter::{ModelAdapter, ModelRequest};
 use crate::config::AppConfig;
 use crate::fs::{ensure_directory, slugify_project_name};
 use crate::services::block::list_blocks;
+use crate::services::graph::{UpsertRelationInput, upsert_relation};
 use crate::services::import::{DocumentRecord, get_document, list_documents};
 use crate::services::project::get_project;
-use crate::sidecar::generate_presentation_pptx;
+use crate::sidecar::{enhance_graph_with_networkx, generate_presentation_pptx, parse_document};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -75,6 +76,71 @@ struct PresentationOutlineSlide {
     objective: String,
     key_points: Vec<String>,
     visual_direction: String,
+}
+
+#[derive(Debug, Clone)]
+struct LocalGraphNode {
+    id: String,
+    label: String,
+    node_type: String,
+    weight: usize,
+}
+
+#[derive(Debug, Clone)]
+struct LocalGraphRelation {
+    source: String,
+    target: String,
+    relation_type: String,
+    confidence: f64,
+}
+
+#[derive(Debug, Clone)]
+struct LocalGraphBuildResult {
+    nodes: Vec<LocalGraphNode>,
+    relations: Vec<LocalGraphRelation>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StudioGraphPreviewPayload {
+    graph: Option<StudioGraphPreviewGraph>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StudioGraphPreviewGraph {
+    nodes: Vec<StudioGraphPreviewNode>,
+    links: Vec<StudioGraphPreviewLink>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StudioGraphPreviewNode {
+    id: String,
+    label: String,
+    weight: Option<usize>,
+    #[serde(default)]
+    node_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StudioGraphPreviewLink {
+    source: String,
+    target: String,
+    #[serde(default)]
+    relation_type: Option<String>,
+    #[serde(default)]
+    confidence: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphSourceSnippetRecord {
+    pub document_id: String,
+    pub title: String,
+    pub snippet: String,
+    pub score: f64,
 }
 
 pub fn create_studio_artifact(
@@ -161,7 +227,7 @@ pub fn generate_studio_artifact(
     connection: &Connection,
     config: &AppConfig,
     artifact_id: &str,
-    model_adapter: &dyn ModelAdapter,
+    model_adapter: Option<&dyn ModelAdapter>,
 ) -> Result<StudioArtifactRecord, String> {
     let artifact = get_studio_artifact(connection, artifact_id)?
         .ok_or_else(|| "Studio 产物不存在".to_string())?;
@@ -182,9 +248,148 @@ pub fn generate_studio_artifact(
     )?;
     let source_documents =
         load_source_documents(connection, &project.project_id, &source_document_ids)?;
-    let source_bundle = build_source_bundle(connection, &source_documents)?;
 
-    let (output_path, preview_json) = if artifact.kind == "presentation" {
+    let (output_path, preview_json) = if matches!(
+        artifact.kind.as_str(),
+        "knowledge_graph" | "knowledge_graph_3d"
+    ) {
+        let model_adapter = model_adapter.ok_or_else(|| "图谱生成需要可用 AI 服务".to_string())?;
+        let mut progress_details: Vec<String> = Vec::new();
+        let mut progress_excerpt = String::new();
+        let (source_bundle, used_direct_parse) = build_source_bundle_for_graph(
+            connection,
+            config,
+            artifact_id,
+            &source_documents,
+            |progress_percent, stage, detail, excerpt| {
+                if let Some(detail_line) = detail {
+                    let cleaned = detail_line.trim();
+                    if !cleaned.is_empty() {
+                        progress_details.push(cleaned.to_string());
+                        if progress_details.len() > 18 {
+                            progress_details.remove(0);
+                        }
+                    }
+                }
+                if let Some(value) = excerpt {
+                    let cleaned = value.trim();
+                    if !cleaned.is_empty() {
+                        progress_excerpt = cleaned.to_string();
+                    }
+                }
+                let preview_json = build_studio_progress_preview_json(
+                    &artifact.kind,
+                    &stage,
+                    &progress_details,
+                    if progress_excerpt.is_empty() {
+                        None
+                    } else {
+                        Some(progress_excerpt.as_str())
+                    },
+                )?;
+                update_artifact_progress(
+                    connection,
+                    artifact_id,
+                    "preparing",
+                    progress_percent,
+                    &stage,
+                    None,
+                    Some(&preview_json),
+                )
+            },
+        )?;
+        update_artifact_progress(
+            connection,
+            artifact_id,
+            "preparing",
+            36,
+            if used_direct_parse {
+                "正在直连解析 PDF 文本并提取知识点"
+            } else {
+                "正在用 AI 提取知识点"
+            },
+            None,
+            None,
+        )?;
+        let system_prompt = load_studio_prompt(config, &artifact.kind)?;
+        let prompt = build_generation_prompt(
+            &artifact.kind,
+            &artifact.title,
+            &source_documents,
+            &source_bundle,
+        );
+        update_artifact_progress(
+            connection,
+            artifact_id,
+            "generating",
+            58,
+            "正在用 AI 构建图谱关系（可在下方查看实时摘要）",
+            None,
+            None,
+        )?;
+        let response = model_adapter.complete(&ModelRequest {
+            task_type: format!("studio.generate.{}", artifact.kind),
+            provider: config.model_settings.provider.clone(),
+            model: config.model_settings.default_model.clone(),
+            system_prompt,
+            prompt,
+            output_format: "text".to_string(),
+            context_blocks: source_bundle
+                .split("\n\n")
+                .take(10)
+                .map(ToOwned::to_owned)
+                .collect(),
+            metadata_json: json!({
+                "artifactId": artifact_id,
+                "kind": artifact.kind,
+                "projectId": artifact.project_id
+            })
+            .to_string(),
+            temperature: 0.2,
+            max_output_tokens: 3600,
+        })?;
+
+        update_artifact_progress(
+            connection,
+            artifact_id,
+            "materializing",
+            82,
+            "正在写入 AI 图谱结果",
+            None,
+            None,
+        )?;
+        let output_path = write_artifact_output(
+            &project.root_path,
+            &artifact.kind,
+            &artifact.title,
+            &response.output_text,
+        )?;
+        let preview_json = build_preview_json(&artifact.kind, &response.output_text)?;
+        update_artifact_progress(
+            connection,
+            artifact_id,
+            "materializing",
+            90,
+            "正在用 NetworkX 增强图谱连通性与细粒度关系",
+            None,
+            None,
+        )?;
+        let preview_json = enhance_preview_graph_with_networkx(config, &preview_json)?;
+        let synced = sync_graph_from_preview_json(
+            connection,
+            &artifact.project_id,
+            artifact_id,
+            &artifact.title,
+            &preview_json,
+        )?;
+        if !synced {
+            return Err("AI 输出未形成有效图谱结构，请检查模型返回格式".to_string());
+        }
+        (output_path, preview_json)
+    } else if artifact.kind == "presentation" {
+        let model_adapter =
+            model_adapter.ok_or_else(|| "当前生成类型需要可用 AI 模型".to_string())?;
+        let source_bundle = build_source_bundle(connection, &source_documents)?;
         update_artifact_progress(
             connection,
             artifact_id,
@@ -235,6 +440,9 @@ pub fn generate_studio_artifact(
         )?;
         materialize_presentation_artifact(config, &project.root_path, &artifact.title, &deck)?
     } else {
+        let model_adapter =
+            model_adapter.ok_or_else(|| "当前生成类型需要可用 AI 模型".to_string())?;
+        let source_bundle = build_source_bundle(connection, &source_documents)?;
         update_artifact_progress(
             connection,
             artifact_id,
@@ -324,12 +532,30 @@ pub fn mark_studio_artifact_failed(
     connection
         .execute(
             "UPDATE studio_artifacts
-             SET status = 'failed', current_stage = '生成失败', error_message = ?1, updated_at = ?2
+             SET status = 'failed',
+                 current_stage = '生成失败',
+                 error_message = ?1,
+                 updated_at = ?2
              WHERE artifact_id = ?3",
             params![error_message, now, artifact_id],
         )
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+pub fn recover_interrupted_studio_artifacts(connection: &Connection) -> Result<usize, String> {
+    let now = Utc::now().to_rfc3339();
+    connection
+        .execute(
+            "UPDATE studio_artifacts
+             SET status = 'failed',
+                 current_stage = '生成已中断',
+                 error_message = '应用重启导致上次生成任务中断，请重新发起生成',
+                 updated_at = ?1
+             WHERE status NOT IN ('completed', 'failed')",
+            params![now],
+        )
+        .map_err(|error| error.to_string())
 }
 
 fn update_artifact_progress(
@@ -352,7 +578,8 @@ fn update_artifact_progress(
                  preview_json = COALESCE(?5, preview_json),
                  error_message = CASE WHEN ?1 = 'failed' THEN error_message ELSE NULL END,
                  updated_at = ?6
-             WHERE artifact_id = ?7",
+             WHERE artifact_id = ?7
+               AND status NOT IN ('completed', 'failed')",
             params![
                 status,
                 progress_percent,
@@ -365,6 +592,232 @@ fn update_artifact_progress(
         )
         .map_err(|error| error.to_string())?;
     Ok(())
+}
+
+fn normalize_local_graph_label(raw: &str) -> String {
+    let mut value = raw
+        .replace("`", " ")
+        .replace('*', " ")
+        .replace('#', " ")
+        .replace('>', " ")
+        .replace(['[', ']', '(', ')', '{', '}'], " ")
+        .replace('\t', " ")
+        .replace('\r', " ")
+        .replace('\n', " ");
+    value = value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .trim_matches(['-', '—', ':', '：', '.', '。', '，', ',', ';', '；'])
+        .to_string();
+
+    if value.chars().count() > 42 {
+        value = value.chars().take(42).collect::<String>();
+    }
+    if value.chars().count() < 2 {
+        return String::new();
+    }
+    value
+}
+
+fn normalize_relation_type(raw: &str) -> String {
+    let value = raw.trim();
+    if value.is_empty() {
+        "关联".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn sync_local_graph_to_database(
+    connection: &Connection,
+    project_id: &str,
+    artifact_id: &str,
+    artifact_title: &str,
+    graph: &LocalGraphBuildResult,
+) -> Result<(), String> {
+    connection
+        .execute(
+            "DELETE FROM graph_relations
+             WHERE project_id = ?1 AND origin_type = 'artifact'",
+            [project_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "DELETE FROM graph_nodes
+             WHERE project_id = ?1 AND metadata_json LIKE '%\"generatedBy\":\"studio_local_graph\"%'",
+            [project_id],
+        )
+        .map_err(|error| error.to_string())?;
+    connection
+        .execute(
+            "DELETE FROM graph_nodes
+             WHERE project_id = ?1
+               AND node_type = 'concept'
+               AND metadata_json LIKE '%\"studioArtifactId\":%'",
+            [project_id],
+        )
+        .map_err(|error| error.to_string())?;
+
+    let mut label_to_node_id: HashMap<String, String> = HashMap::new();
+    let mut statement = connection
+        .prepare("SELECT node_id, label FROM graph_nodes WHERE project_id = ?1")
+        .map_err(|error| error.to_string())?;
+    let rows = statement
+        .query_map([project_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .map_err(|error| error.to_string())?;
+    for row in rows {
+        let (node_id, label) = row.map_err(|error| error.to_string())?;
+        label_to_node_id.insert(label.to_lowercase(), node_id);
+    }
+
+    let mut local_to_db: HashMap<String, String> = HashMap::new();
+    let now = Utc::now().to_rfc3339();
+    for node in &graph.nodes {
+        let key = node.label.to_lowercase();
+        if let Some(existing_node_id) = label_to_node_id.get(&key).cloned() {
+            local_to_db.insert(node.id.clone(), existing_node_id);
+            continue;
+        }
+
+        let node_id = Uuid::new_v4().to_string();
+        let metadata_json = json!({
+            "generatedBy": "studio_local_graph",
+            "studioArtifactId": artifact_id,
+            "studioArtifactTitle": artifact_title,
+            "weight": node.weight,
+            "nodeType": node.node_type
+        })
+        .to_string();
+        connection
+            .execute(
+                "INSERT INTO graph_nodes (
+                    node_id, project_id, node_type, label, source_ref, metadata_json, created_at, updated_at
+                ) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)",
+                params![
+                    node_id,
+                    project_id,
+                    node.node_type,
+                    node.label,
+                    metadata_json,
+                    now,
+                    now
+                ],
+            )
+            .map_err(|error| error.to_string())?;
+        label_to_node_id.insert(key, node_id.clone());
+        local_to_db.insert(node.id.clone(), node_id);
+    }
+
+    for relation in &graph.relations {
+        let from_node_id = local_to_db.get(&relation.source).cloned();
+        let to_node_id = local_to_db.get(&relation.target).cloned();
+        let (Some(from_node_id), Some(to_node_id)) = (from_node_id, to_node_id) else {
+            continue;
+        };
+        if from_node_id == to_node_id {
+            continue;
+        }
+        let _ = upsert_relation(
+            connection,
+            UpsertRelationInput {
+                project_id,
+                from_node_id: &from_node_id,
+                to_node_id: &to_node_id,
+                relation_type: &relation.relation_type,
+                confidence: Some(relation.confidence),
+                origin_type: "artifact",
+                source_ref: Some(artifact_id),
+                confirmed_by_user: true,
+            },
+        )?;
+    }
+
+    Ok(())
+}
+
+fn sync_graph_from_preview_json(
+    connection: &Connection,
+    project_id: &str,
+    artifact_id: &str,
+    artifact_title: &str,
+    preview_json: &str,
+) -> Result<bool, String> {
+    let Some(graph) = local_graph_from_preview_json(preview_json)? else {
+        return Ok(false);
+    };
+    if graph.nodes.is_empty() || graph.relations.is_empty() {
+        return Ok(false);
+    }
+    sync_local_graph_to_database(connection, project_id, artifact_id, artifact_title, &graph)?;
+    Ok(true)
+}
+
+fn local_graph_from_preview_json(
+    preview_json: &str,
+) -> Result<Option<LocalGraphBuildResult>, String> {
+    let parsed: StudioGraphPreviewPayload =
+        serde_json::from_str(preview_json).map_err(|error| error.to_string())?;
+    let Some(graph) = parsed.graph else {
+        return Ok(None);
+    };
+    if graph.nodes.is_empty() || graph.links.is_empty() {
+        return Ok(None);
+    }
+
+    let mut nodes = Vec::new();
+    let mut node_id_set = HashSet::new();
+    for node in graph.nodes {
+        if node.id.trim().is_empty() {
+            continue;
+        }
+        let label = normalize_local_graph_label(&node.label);
+        if label.is_empty() {
+            continue;
+        }
+        node_id_set.insert(node.id.clone());
+        nodes.push(LocalGraphNode {
+            id: node.id,
+            label,
+            node_type: node.node_type.unwrap_or_else(|| "concept".to_string()),
+            weight: node.weight.unwrap_or(1),
+        });
+    }
+    if nodes.is_empty() {
+        return Ok(None);
+    }
+
+    let mut relation_set = HashSet::new();
+    let mut relations = Vec::new();
+    for link in graph.links {
+        if link.source.trim().is_empty() || link.target.trim().is_empty() {
+            continue;
+        }
+        if !node_id_set.contains(&link.source) || !node_id_set.contains(&link.target) {
+            continue;
+        }
+        let relation_type =
+            normalize_relation_type(&link.relation_type.unwrap_or_else(|| "关联".to_string()));
+        let relation_key = format!("{}::{}::{}", link.source, link.target, relation_type);
+        if !relation_set.insert(relation_key) {
+            continue;
+        }
+        relations.push(LocalGraphRelation {
+            source: link.source,
+            target: link.target,
+            relation_type,
+            confidence: link.confidence.unwrap_or(0.82),
+        });
+    }
+
+    if relations.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(LocalGraphBuildResult { nodes, relations }))
 }
 
 fn load_source_documents(
@@ -404,6 +857,449 @@ fn build_source_bundle(
         ));
     }
     Ok(sections.join("\n\n---\n\n"))
+}
+
+fn build_source_bundle_for_graph<F>(
+    connection: &Connection,
+    config: &AppConfig,
+    artifact_id: &str,
+    source_documents: &[DocumentRecord],
+    on_progress: F,
+) -> Result<(String, bool), String>
+where
+    F: FnMut(i64, String, Option<String>, Option<String>) -> Result<(), String>,
+{
+    let mut on_progress = on_progress;
+    if let Ok(bundle) = build_source_bundle(connection, source_documents) {
+        let total = source_documents.len().max(1) as i64;
+        let detail = format!("已读取 {total} 份资料的标准文本（normalized/blocks）");
+        on_progress(30, "已完成资料来源整理".to_string(), Some(detail), None)?;
+        return Ok((bundle, false));
+    }
+
+    let mut sections = Vec::new();
+    let total = source_documents.len().max(1);
+    for (index, document) in source_documents.iter().enumerate() {
+        let document_title = document
+            .title
+            .clone()
+            .unwrap_or_else(|| fallback_document_name(document));
+        let base_progress = 12 + (((index as i64) * 20) / (total as i64));
+        let stage = format!(
+            "正在读取第 {}/{} 份资料：{}",
+            index + 1,
+            total,
+            document_title
+        );
+        on_progress(base_progress, stage, None, None)?;
+
+        let content = if let Ok(value) = read_document_material(connection, document) {
+            let detail = format!("{}：已读取结构化文本", document_title);
+            on_progress(
+                base_progress + 1,
+                "结构化文本读取完成".to_string(),
+                Some(detail),
+                None,
+            )?;
+            value
+        } else {
+            if let Some(cached_markdown) = read_graph_parse_cache(config, document) {
+                let detail = format!("{}：命中本地极速文本缓存", document_title);
+                on_progress(
+                    base_progress + 2,
+                    "已读取极速缓存文本".to_string(),
+                    Some(detail),
+                    Some(extract_progress_excerpt(&cached_markdown)),
+                )?;
+                cached_markdown
+            } else {
+            let temp_document_id = format!("studio-{}-{}", artifact_id, index + 1);
+            let detail = format!("{}：未找到结构化文本，开始极速提取原文文本", document_title);
+            on_progress(
+                base_progress + 1,
+                "正在极速解析 PDF 原文（PyMuPDF）".to_string(),
+                Some(detail),
+                None,
+            )?;
+            let normalized = parse_document(
+                config,
+                &document.source_path,
+                &document.source_type,
+                &temp_document_id,
+            )?;
+            let extracted_line_count = normalized.markdown.lines().count();
+            let detail = format!(
+                "{}：直连解析完成，提取 {} 行文本",
+                document_title, extracted_line_count
+            );
+            on_progress(
+                base_progress + 3,
+                "原文极速解析完成".to_string(),
+                Some(detail),
+                Some(extract_progress_excerpt(&normalized.markdown)),
+            )?;
+            write_graph_parse_cache(config, document, &normalized.markdown);
+            normalized.markdown
+            }
+        };
+
+        let trimmed = trim_for_model(content.trim());
+        if trimmed.is_empty() {
+            continue;
+        }
+        let detail = format!(
+            "{}：纳入图谱输入（约 {} 字）",
+            document_title,
+            trimmed.chars().count()
+        );
+        on_progress(
+            base_progress + 5,
+            "正在汇总图谱输入".to_string(),
+            Some(detail),
+            Some(extract_progress_excerpt(&trimmed)),
+        )?;
+        sections.push(format!("# 资料：{document_title}\n\n{trimmed}"));
+    }
+
+    if sections.is_empty() {
+        return Err("资料尚未产生可用于图谱生成的文本内容".to_string());
+    }
+
+    on_progress(
+        34,
+        "资料来源整理完成，准备发送到图谱 AI".to_string(),
+        Some(format!("已完成 {} 份资料聚合", sections.len())),
+        None,
+    )?;
+    Ok((sections.join("\n\n---\n\n"), true))
+}
+
+fn extract_progress_excerpt(raw: &str) -> String {
+    raw.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(5)
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(220)
+        .collect::<String>()
+}
+
+fn build_studio_progress_preview_json(
+    kind: &str,
+    current_stage: &str,
+    details: &[String],
+    excerpt: Option<&str>,
+) -> Result<String, String> {
+    let progress = json!({
+        "currentStage": current_stage,
+        "details": details,
+        "excerpt": excerpt.unwrap_or(""),
+        "updatedAt": Utc::now().to_rfc3339(),
+    });
+    let payload = json!({
+        "kind": kind,
+        "lineCount": 0,
+        "excerpt": excerpt.unwrap_or(""),
+        "progress": progress,
+        "graph": serde_json::Value::Null,
+        "practiceSet": serde_json::Value::Null,
+        "mindMap": serde_json::Value::Null,
+        "presentation": serde_json::Value::Null
+    });
+    serde_json::to_string(&payload).map_err(|error| error.to_string())
+}
+
+fn graph_parse_cache_path(config: &AppConfig, document: &DocumentRecord) -> PathBuf {
+    let source_hash_part = document
+        .source_hash
+        .as_deref()
+        .map(|value| value.chars().take(12).collect::<String>())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "nohash".to_string());
+    config
+        .data_dir
+        .join("studio_graph_cache")
+        .join(format!("{}-{}.md", document.document_id, source_hash_part))
+}
+
+fn read_graph_parse_cache(config: &AppConfig, document: &DocumentRecord) -> Option<String> {
+    let cache_path = graph_parse_cache_path(config, document);
+    if !cache_path.exists() {
+        return None;
+    }
+    fs::read_to_string(cache_path)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn write_graph_parse_cache(config: &AppConfig, document: &DocumentRecord, markdown: &str) {
+    let content = markdown.trim();
+    if content.is_empty() {
+        return;
+    }
+    let cache_path = graph_parse_cache_path(config, document);
+    if let Some(parent) = cache_path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(cache_path, content);
+}
+
+pub fn query_graph_source_snippets(
+    connection: &Connection,
+    config: &AppConfig,
+    project_id: &str,
+    artifact_id: Option<&str>,
+    keyword: &str,
+    limit: usize,
+) -> Result<Vec<GraphSourceSnippetRecord>, String> {
+    let keyword = keyword.trim();
+    if keyword.is_empty() {
+        return Ok(Vec::new());
+    }
+    let limit = limit.clamp(1, 12);
+    let documents = resolve_graph_source_documents(connection, project_id, artifact_id)?;
+    if documents.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut snippets = Vec::<GraphSourceSnippetRecord>::new();
+    for document in &documents {
+        let source_text = read_graph_parse_cache(config, document)
+            .or_else(|| read_document_material(connection, document).ok());
+        let Some(source_text) = source_text else {
+            continue;
+        };
+        let matches = extract_keyword_snippets_from_text(&source_text, keyword, 3);
+        if matches.is_empty() {
+            continue;
+        }
+        let title = document
+            .title
+            .clone()
+            .unwrap_or_else(|| fallback_document_name(document));
+        for (snippet, score) in matches {
+            snippets.push(GraphSourceSnippetRecord {
+                document_id: document.document_id.clone(),
+                title: title.clone(),
+                snippet,
+                score,
+            });
+        }
+    }
+
+    snippets.sort_by(|left, right| {
+        right
+            .score
+            .partial_cmp(&left.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.document_id.cmp(&right.document_id))
+    });
+
+    let mut dedup = HashSet::<String>::new();
+    let mut ordered = Vec::new();
+    for item in snippets {
+        let key = format!("{}::{}", item.document_id, item.snippet);
+        if dedup.insert(key) {
+            ordered.push(item);
+        }
+        if ordered.len() >= limit {
+            break;
+        }
+    }
+
+    if !ordered.is_empty() {
+        return Ok(ordered);
+    }
+
+    for document in &documents {
+        let source_text = read_graph_parse_cache(config, document)
+            .or_else(|| read_document_material(connection, document).ok());
+        let Some(source_text) = source_text else {
+            continue;
+        };
+        let fallback_snippet = source_text
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .take(6)
+            .collect::<Vec<_>>()
+            .join(" ");
+        if fallback_snippet.is_empty() {
+            continue;
+        }
+        ordered.push(GraphSourceSnippetRecord {
+            document_id: document.document_id.clone(),
+            title: document
+                .title
+                .clone()
+                .unwrap_or_else(|| fallback_document_name(document)),
+            snippet: normalize_snippet_text(&fallback_snippet),
+            score: 0.01,
+        });
+        if ordered.len() >= limit {
+            break;
+        }
+    }
+
+    Ok(ordered)
+}
+
+fn resolve_graph_source_documents(
+    connection: &Connection,
+    project_id: &str,
+    artifact_id: Option<&str>,
+) -> Result<Vec<DocumentRecord>, String> {
+    let selected_artifact = if let Some(artifact_id) = artifact_id {
+        get_studio_artifact(connection, artifact_id)?
+    } else {
+        list_studio_artifacts(connection, project_id)?
+            .into_iter()
+            .find(|item| {
+                (item.kind == "knowledge_graph_3d" || item.kind == "knowledge_graph")
+                    && item.status != "failed"
+            })
+    };
+
+    let mut document_ids = Vec::<String>::new();
+    if let Some(artifact) = selected_artifact {
+        let ids = serde_json::from_str::<Vec<String>>(&artifact.source_document_ids_json)
+            .unwrap_or_default();
+        document_ids.extend(ids);
+    }
+
+    let mut documents = Vec::<DocumentRecord>::new();
+    let mut seen_ids = HashSet::<String>::new();
+    for document_id in document_ids {
+        let Some(document) =
+            get_document(connection, &document_id).map_err(|error| error.to_string())?
+        else {
+            continue;
+        };
+        if document.project_id != project_id {
+            continue;
+        }
+        if seen_ids.insert(document.document_id.clone()) {
+            documents.push(document);
+        }
+    }
+
+    if !documents.is_empty() {
+        return Ok(documents);
+    }
+
+    for document in list_documents(connection, project_id).map_err(|error| error.to_string())? {
+        if seen_ids.insert(document.document_id.clone()) {
+            documents.push(document);
+        }
+    }
+    Ok(documents)
+}
+
+fn extract_keyword_snippets_from_text(
+    text: &str,
+    keyword: &str,
+    max_count: usize,
+) -> Vec<(String, f64)> {
+    let mut snippets = Vec::<(String, f64)>::new();
+    let normalized_text = text.to_lowercase();
+    let normalized_keyword = keyword.to_lowercase();
+
+    for (match_index, (byte_index, _)) in normalized_text
+        .match_indices(&normalized_keyword)
+        .take(max_count * 2)
+        .enumerate()
+    {
+        let snippet = build_window_snippet(
+            text,
+            byte_index,
+            keyword.chars().count().max(1),
+            220,
+        );
+        if snippet.is_empty() {
+            continue;
+        }
+        let score = 1.0 - (match_index as f64 * 0.1);
+        snippets.push((snippet, score.max(0.4)));
+        if snippets.len() >= max_count {
+            return snippets;
+        }
+    }
+
+    let tokens = keyword
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '+' && ch != '#')
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    if tokens.is_empty() {
+        return snippets;
+    }
+
+    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
+        let line_lower = line.to_lowercase();
+        if !tokens.iter().any(|token| line_lower.contains(&token.to_lowercase())) {
+            continue;
+        }
+        snippets.push((normalize_snippet_text(line), 0.35));
+        if snippets.len() >= max_count {
+            break;
+        }
+    }
+    snippets
+}
+
+fn build_window_snippet(
+    text: &str,
+    start_byte: usize,
+    keyword_char_count: usize,
+    window_char_count: usize,
+) -> String {
+    if text.is_empty() {
+        return String::new();
+    }
+    let char_indices = text.char_indices().collect::<Vec<_>>();
+    if char_indices.is_empty() {
+        return String::new();
+    }
+    let total_chars = char_indices.len();
+    let start_char_index = char_indices.partition_point(|(byte, _)| *byte < start_byte);
+    let half_window = window_char_count / 2;
+    let from_char_index = start_char_index.saturating_sub(half_window);
+    let to_char_index = (start_char_index + keyword_char_count + half_window).min(total_chars);
+
+    let from_byte = char_indices
+        .get(from_char_index)
+        .map(|(byte, _)| *byte)
+        .unwrap_or(0);
+    let to_byte = char_indices
+        .get(to_char_index)
+        .map(|(byte, _)| *byte)
+        .unwrap_or(text.len());
+
+    let mut snippet = normalize_snippet_text(&text[from_byte..to_byte]);
+    if snippet.is_empty() {
+        return snippet;
+    }
+    if from_byte > 0 {
+        snippet = format!("…{snippet}");
+    }
+    if to_byte < text.len() {
+        snippet.push('…');
+    }
+    snippet
+}
+
+fn normalize_snippet_text(input: &str) -> String {
+    input
+        .replace('\r', " ")
+        .replace('\n', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .trim()
+        .to_string()
 }
 
 fn read_document_material(
@@ -819,6 +1715,26 @@ fn build_preview_json(kind: &str, content: &str) -> Result<String, String> {
     serde_json::to_string(&preview).map_err(|error| error.to_string())
 }
 
+fn enhance_preview_graph_with_networkx(
+    config: &AppConfig,
+    preview_json: &str,
+) -> Result<String, String> {
+    let mut payload: serde_json::Value =
+        serde_json::from_str(preview_json).map_err(|error| error.to_string())?;
+    let Some(graph_payload) = payload.get("graph").cloned() else {
+        return Ok(preview_json.to_string());
+    };
+    if !graph_payload.is_object() {
+        return Ok(preview_json.to_string());
+    }
+
+    let enhanced_graph = enhance_graph_with_networkx(config, &graph_payload)?;
+    if let Some(object) = payload.as_object_mut() {
+        object.insert("graph".to_string(), enhanced_graph);
+    }
+    serde_json::to_string(&payload).map_err(|error| error.to_string())
+}
+
 fn build_presentation_preview_json(deck: &PresentationDeck) -> Result<String, String> {
     let preview = json!({
         "kind": "presentation",
@@ -841,7 +1757,8 @@ fn build_presentation_preview_json(deck: &PresentationDeck) -> Result<String, St
 
 fn build_graph_preview(content: &str) -> Option<serde_json::Value> {
     let mut node_map: BTreeMap<String, (String, usize)> = BTreeMap::new();
-    let mut links = Vec::new();
+    let mut links: Vec<(String, String, String)> = Vec::new();
+    let mut link_pair_set: HashSet<String> = HashSet::new();
     let mermaid = extract_mermaid_graph(content)?;
 
     for line in mermaid.lines().map(str::trim) {
@@ -849,7 +1766,7 @@ fn build_graph_preview(content: &str) -> Option<serde_json::Value> {
             continue;
         }
 
-        let Some((source_token, target_token)) = extract_graph_edge(line) else {
+        let Some((source_token, target_token, relation_type)) = extract_graph_edge(line) else {
             continue;
         };
         let (source_id, source_label) = parse_graph_node(source_token);
@@ -871,23 +1788,47 @@ fn build_graph_preview(content: &str) -> Option<serde_json::Value> {
             .and_modify(|entry| entry.1 += 1)
             .or_insert((target_label, 1));
 
-        links.push(json!({
-            "source": source_id,
-            "target": target_id
-        }));
+        let relation_type = normalize_preview_relation_type(
+            &relation_type.unwrap_or_else(|| "关联".to_string()),
+        );
+        let pair_key = graph_pair_key(&source_id, &target_id);
+        if !link_pair_set.insert(pair_key) {
+            continue;
+        }
+        links.push((source_id, target_id, relation_type));
     }
 
     if node_map.is_empty() || links.is_empty() {
         return None;
     }
 
+    augment_graph_links(&node_map, &mut links);
+
+    let mut degree_map: HashMap<String, usize> = HashMap::new();
+    for (source, target, _) in &links {
+        *degree_map.entry(source.clone()).or_insert(0) += 1;
+        *degree_map.entry(target.clone()).or_insert(0) += 1;
+    }
+
     let nodes = node_map
         .into_iter()
         .map(|(id, (label, weight))| {
+            let degree = degree_map.get(&id).copied().unwrap_or(1);
             json!({
                 "id": id,
                 "label": label,
-                "weight": weight
+                "weight": weight.max(degree)
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let links = links
+        .into_iter()
+        .map(|(source, target, relation_type)| {
+            json!({
+                "source": source,
+                "target": target,
+                "relationType": relation_type
             })
         })
         .collect::<Vec<_>>();
@@ -896,6 +1837,190 @@ fn build_graph_preview(content: &str) -> Option<serde_json::Value> {
         "nodes": nodes,
         "links": links
     }))
+}
+
+fn normalize_preview_relation_type(raw: &str) -> String {
+    let value = raw.trim();
+    if value.is_empty() {
+        return "关联".to_string();
+    }
+    if value.contains("前置") || value.contains("依赖") {
+        return "前置依赖".to_string();
+    }
+    if value.contains("包含") || value.contains("组成") || value.contains("属于") {
+        return "包含".to_string();
+    }
+    if value.contains("对比") || value.contains("并列") || value.contains("区别") {
+        return "并列对比".to_string();
+    }
+    if value.contains("实现") || value.contains("调用") {
+        return "实现/调用".to_string();
+    }
+    if value.contains("输入") || value.contains("输出") || value.contains("参数") || value.contains("返回") {
+        return "输入输出".to_string();
+    }
+    if value.contains("场景") || value.contains("应用") {
+        return "应用场景".to_string();
+    }
+    if value.contains("约束") || value.contains("限制") || value.contains("边界") {
+        return "约束/边界".to_string();
+    }
+    if value.contains("混淆") {
+        return "易混淆".to_string();
+    }
+    if value.contains("示例") || value == "例子" {
+        return "示例".to_string();
+    }
+    value.to_string()
+}
+
+fn graph_pair_key(left: &str, right: &str) -> String {
+    if left <= right {
+        format!("{left}::{right}")
+    } else {
+        format!("{right}::{left}")
+    }
+}
+
+fn choose_component_hub(
+    component: &[String],
+    degree_map: &HashMap<String, usize>,
+    node_map: &BTreeMap<String, (String, usize)>,
+) -> Option<String> {
+    component
+        .iter()
+        .max_by(|left, right| {
+            let left_degree = degree_map.get(*left).copied().unwrap_or(0);
+            let right_degree = degree_map.get(*right).copied().unwrap_or(0);
+            if left_degree != right_degree {
+                return left_degree.cmp(&right_degree);
+            }
+            let left_weight = node_map.get(*left).map(|(_, weight)| *weight).unwrap_or(0);
+            let right_weight = node_map.get(*right).map(|(_, weight)| *weight).unwrap_or(0);
+            if left_weight != right_weight {
+                return left_weight.cmp(&right_weight);
+            }
+            left.cmp(right)
+        })
+        .cloned()
+}
+
+fn augment_graph_links(
+    node_map: &BTreeMap<String, (String, usize)>,
+    links: &mut Vec<(String, String, String)>,
+) {
+    let node_count = node_map.len();
+    if node_count < 2 {
+        return;
+    }
+
+    let mut adjacency: HashMap<String, Vec<String>> = node_map
+        .keys()
+        .cloned()
+        .map(|node_id| (node_id, Vec::new()))
+        .collect();
+    let mut degree_map: HashMap<String, usize> = HashMap::new();
+    let mut link_pair_set: HashSet<String> = HashSet::new();
+
+    for (source, target, _) in links.iter() {
+        adjacency.entry(source.clone()).or_default().push(target.clone());
+        adjacency.entry(target.clone()).or_default().push(source.clone());
+        *degree_map.entry(source.clone()).or_insert(0) += 1;
+        *degree_map.entry(target.clone()).or_insert(0) += 1;
+        link_pair_set.insert(graph_pair_key(source, target));
+    }
+
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut components: Vec<Vec<String>> = Vec::new();
+    for node_id in node_map.keys() {
+        if visited.contains(node_id) {
+            continue;
+        }
+        let mut stack = vec![node_id.clone()];
+        let mut component = Vec::new();
+        visited.insert(node_id.clone());
+        while let Some(current) = stack.pop() {
+            component.push(current.clone());
+            let neighbors = adjacency.get(&current).cloned().unwrap_or_default();
+            for neighbor in neighbors {
+                if visited.insert(neighbor.clone()) {
+                    stack.push(neighbor);
+                }
+            }
+        }
+        components.push(component);
+    }
+    components.sort_by(|left, right| right.len().cmp(&left.len()));
+
+    if components.len() > 1
+        && let Some(main_hub) = choose_component_hub(&components[0], &degree_map, node_map)
+    {
+        for component in components.iter().skip(1) {
+            let Some(component_hub) = choose_component_hub(component, &degree_map, node_map) else {
+                continue;
+            };
+            if component_hub == main_hub {
+                continue;
+            }
+            let pair_key = graph_pair_key(&component_hub, &main_hub);
+            if !link_pair_set.insert(pair_key) {
+                continue;
+            }
+            links.push((
+                component_hub.clone(),
+                main_hub.clone(),
+                "关联".to_string(),
+            ));
+            adjacency
+                .entry(component_hub.clone())
+                .or_default()
+                .push(main_hub.clone());
+            adjacency
+                .entry(main_hub.clone())
+                .or_default()
+                .push(component_hub.clone());
+            *degree_map.entry(component_hub).or_insert(0) += 1;
+            *degree_map.entry(main_hub.clone()).or_insert(0) += 1;
+        }
+    }
+
+    let target_edge_count = (((node_count * 3) + 1) / 2).max(18).min(node_count * 3);
+    if links.len() >= target_edge_count {
+        return;
+    }
+
+    let mut hubs = node_map.keys().cloned().collect::<Vec<_>>();
+    hubs.sort_by(|left, right| {
+        let left_degree = degree_map.get(left).copied().unwrap_or(0);
+        let right_degree = degree_map.get(right).copied().unwrap_or(0);
+        right_degree.cmp(&left_degree)
+    });
+    hubs.truncate(3);
+
+    let mut low_degree_nodes = node_map.keys().cloned().collect::<Vec<_>>();
+    low_degree_nodes.sort_by(|left, right| {
+        let left_degree = degree_map.get(left).copied().unwrap_or(0);
+        let right_degree = degree_map.get(right).copied().unwrap_or(0);
+        left_degree.cmp(&right_degree)
+    });
+
+    for node_id in low_degree_nodes {
+        for hub in &hubs {
+            if links.len() >= target_edge_count {
+                return;
+            }
+            if &node_id == hub {
+                continue;
+            }
+            let pair_key = graph_pair_key(&node_id, hub);
+            if !link_pair_set.insert(pair_key) {
+                continue;
+            }
+            links.push((node_id.clone(), hub.clone(), "关联".to_string()));
+            *degree_map.entry(node_id.clone()).or_insert(0) += 1;
+            *degree_map.entry(hub.clone()).or_insert(0) += 1;
+        }
+    }
 }
 
 fn extract_mermaid_graph(content: &str) -> Option<&str> {
@@ -1051,24 +2176,44 @@ fn parse_option_line(line: &str) -> Option<(String, String)> {
     Some((key.to_string(), rest.to_string()))
 }
 
-fn extract_graph_edge(line: &str) -> Option<(&str, &str)> {
-    let segments = line
-        .split("-->")
-        .map(str::trim)
-        .filter(|segment| !segment.is_empty())
-        .collect::<Vec<_>>();
+fn extract_graph_edge(line: &str) -> Option<(&str, &str, Option<String>)> {
+    if let Some(arrow_index) = line.rfind("-->") {
+        let left = line[..arrow_index].trim();
+        let right = line[arrow_index + 3..].trim();
+        let mut target_token = right;
+        let mut relation_from_right: Option<String> = None;
 
-    if segments.len() >= 3 {
-        let source = segments.first().copied()?;
-        let target = segments.last().copied()?;
-        return Some((source, target));
+        if let Some(stripped) = right.strip_prefix('|')
+            && let Some(pipe_end) = stripped.find('|')
+        {
+            let relation = stripped[..pipe_end].trim();
+            let rest = stripped[pipe_end + 1..].trim();
+            if !relation.is_empty() {
+                relation_from_right = Some(relation.to_string());
+            }
+            if !rest.is_empty() {
+                target_token = rest;
+            }
+        }
+
+        if let Some((source, relation_token)) = left.split_once("--") {
+            let relation_type = relation_token
+                .trim()
+                .trim_matches('"')
+                .trim_matches('\'')
+                .trim();
+            let relation = if relation_type.is_empty() {
+                relation_from_right
+            } else {
+                Some(relation_type.to_string())
+            };
+            return Some((source.trim(), target_token, relation));
+        }
+        return Some((left, target_token, relation_from_right));
     }
 
-    if let Some((source, target)) = line.split_once("-->") {
-        return Some((source.trim(), target.trim()));
-    }
     if let Some((source, target)) = line.split_once("---") {
-        return Some((source.trim(), target.trim()));
+        return Some((source.trim(), target.trim(), None));
     }
     None
 }

@@ -51,6 +51,12 @@ interface StudioGraphSimulationLink extends SimulationLinkDatum<StudioGraphSimul
 interface StudioPreviewPayload {
   excerpt?: string;
   lineCount?: number;
+  progress?: {
+    currentStage?: string;
+    details?: string[];
+    excerpt?: string;
+    updatedAt?: string;
+  };
   graph?: {
     nodes: StudioGraphPreviewNode[];
     links: StudioGraphPreviewLink[];
@@ -321,6 +327,9 @@ function StudioArtifactDetail({
       return null;
     }
   }, [artifact.previewJson]);
+  const progressDetails = preview?.progress?.details ?? [];
+  const progressExcerpt = preview?.progress?.excerpt ?? preview?.excerpt ?? "";
+  const stageText = preview?.progress?.currentStage ?? artifact.currentStage ?? "等待开始";
 
   return (
     <div className="studio-detail-card">
@@ -334,10 +343,19 @@ function StudioArtifactDetail({
           <div className="studio-detail-progress-bar" style={{ width: `${artifact.progressPercent}%` }} />
         </div>
         <div className="studio-detail-progress-meta">
-          <span>{artifact.currentStage ?? "等待开始"}</span>
+          <span>{stageText}</span>
           <span>{artifact.progressPercent}%</span>
         </div>
       </div>
+      {progressDetails.length > 0 ? (
+        <div className="studio-progress-detail-list">
+          {progressDetails.slice(-10).map((line, index) => (
+            <div key={`${artifact.artifactId}-detail-${index}`} className="studio-progress-detail-line">
+              {line}
+            </div>
+          ))}
+        </div>
+      ) : null}
       {!["completed", "failed"].includes(artifact.status) ? <div className="studio-shimmer-line" aria-hidden="true" /> : null}
       {artifact.outputPath ? (
         <div className="studio-detail-row">
@@ -387,8 +405,8 @@ function StudioArtifactDetail({
       ) : null}
       {artifact.errorMessage ? (
         <div className="studio-detail-error">{artifact.errorMessage}</div>
-      ) : preview?.excerpt && !preview.practiceSet && !preview.mindMap && !preview.presentation ? (
-        <pre className="studio-preview-excerpt">{preview.excerpt}</pre>
+      ) : progressExcerpt && !preview?.practiceSet && !preview?.mindMap && !preview?.presentation ? (
+        <pre className="studio-preview-excerpt">{progressExcerpt}</pre>
       ) : (
         <div className="studio-preview-placeholder">生成完成后，这里会显示结果摘要。</div>
       )}

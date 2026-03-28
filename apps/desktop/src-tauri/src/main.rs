@@ -20,7 +20,8 @@ use commands::agent::{
 };
 use commands::app::get_bootstrap_payload;
 use commands::block::{
-    delete_block_command, insert_note_block_command, list_blocks_command, update_block_command,
+    delete_block_command, get_block_command, insert_note_block_command, list_blocks_command,
+    update_block_command,
 };
 use commands::card::{list_cards_command, save_card_command, update_card_command};
 use commands::explain::{
@@ -43,12 +44,14 @@ use commands::project::{
     create_project, delete_project, list_projects, open_project, rename_project,
 };
 use commands::reader::{
-    chat_with_block_command, get_source_preview_command, upsert_reader_state_command,
+    chat_with_block_command, explain_selection_text_command, get_source_preview_command,
+    upsert_reader_state_command,
 };
 use commands::search::{hybrid_search_project_command, search_project_command};
 use commands::studio::{
-    create_studio_artifact_command, generate_studio_artifact_command, get_studio_artifact_command,
-    list_studio_artifacts_command,
+    cancel_studio_artifact_command, create_studio_artifact_command,
+    generate_studio_artifact_command, get_studio_artifact_command, list_studio_artifacts_command,
+    query_graph_source_command,
 };
 use commands::window::{
     close_window_command, minimize_window_command, open_path_command, start_window_drag_command,
@@ -76,6 +79,7 @@ fn main() {
             get_document_parse_progress_command,
             get_document_pdf_bytes_command,
             list_blocks_command,
+            get_block_command,
             update_block_command,
             delete_block_command,
             insert_note_block_command,
@@ -98,6 +102,7 @@ fn main() {
             upsert_reader_state_command,
             get_source_preview_command,
             chat_with_block_command,
+            explain_selection_text_command,
             plan_agent_task_command,
             list_agent_tasks_command,
             generate_agent_preview_command,
@@ -109,6 +114,8 @@ fn main() {
             generate_studio_artifact_command,
             list_studio_artifacts_command,
             get_studio_artifact_command,
+            cancel_studio_artifact_command,
+            query_graph_source_command,
             start_window_drag_command,
             minimize_window_command,
             toggle_maximize_window_command,

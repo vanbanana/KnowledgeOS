@@ -80,6 +80,17 @@ export const bootstrapPayloadSchema = z.object({
   jobs: listJobsOutputSchema.shape.jobs
 });
 
+const graphSourceSnippetSchema = z.object({
+  documentId: z.string().min(1),
+  title: z.string().min(1),
+  snippet: z.string(),
+  score: z.number()
+});
+
+const queryGraphSourceOutputSchema = z.object({
+  snippets: z.array(graphSourceSnippetSchema)
+});
+
 export const desktopCommandSchemas = {
   appGetBootstrap: {
     command: "get_bootstrap_payload",
@@ -134,6 +145,13 @@ export const desktopCommandSchemas = {
       documentId: z.string().min(1)
     }),
     output: listBlocksOutputSchema
+  },
+  blockGet: {
+    command: "get_block_command",
+    input: z.object({
+      blockId: z.string().min(1)
+    }),
+    output: blockCommandOutputSchema
   },
   blockInsertNote: {
     command: "insert_note_block_command",
@@ -323,6 +341,21 @@ export const desktopCommandSchemas = {
     command: "get_studio_artifact_command",
     input: getStudioArtifactInputSchema,
     output: studioArtifactCommandOutputSchema
+  },
+  studioCancel: {
+    command: "cancel_studio_artifact_command",
+    input: getStudioArtifactInputSchema,
+    output: studioArtifactCommandOutputSchema
+  },
+  studioQuerySource: {
+    command: "query_graph_source_command",
+    input: z.object({
+      projectId: z.string().min(1),
+      keyword: z.string().min(1),
+      artifactId: z.string().min(1).optional(),
+      limit: z.number().int().min(1).max(12).optional()
+    }),
+    output: queryGraphSourceOutputSchema
   },
   jobEnqueueMock: {
     command: "enqueue_mock_job",

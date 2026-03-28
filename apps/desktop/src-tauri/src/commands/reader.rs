@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use tauri::{AppHandle, Emitter};
 
 use crate::ai::model_adapter::{ModelRequest, stream_text_completion};
@@ -36,6 +37,14 @@ pub struct ChatWithBlockPayload {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ExplainSelectionTextPayload {
+    pub selected_text: String,
+    pub document_id: Option<String>,
+    pub request_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatHistoryItem {
     pub role: String,
     pub content: String,
@@ -59,6 +68,39 @@ pub struct ChatWithBlockCommandResponse {
     pub answer: String,
     pub model: String,
     pub provider: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SelectionExplainTerm {
+    pub term: String,
+    pub explanation: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplainSelectionTextCommandResponse {
+    pub summary: String,
+    pub plain_explanation: String,
+    pub key_points: Vec<String>,
+    pub prerequisites: Vec<String>,
+    pub pitfalls: Vec<String>,
+    pub examples: Vec<String>,
+    pub terms: Vec<SelectionExplainTerm>,
+    pub extension: Vec<String>,
+    pub confidence: String,
+    pub raw_json: String,
+    pub model: String,
+    pub provider: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SelectionExplainStreamEventPayload {
+    request_id: String,
+    chunk: String,
+    done: bool,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -194,6 +236,115 @@ pub async fn chat_with_block_command(
     }
 }
 
+#[tauri::command]
+pub async fn explain_selection_text_command(
+    payload: ExplainSelectionTextPayload,
+    state: tauri::State<'_, Arc<Mutex<AppState>>>,
+    app: AppHandle,
+) -> Result<ExplainSelectionTextCommandResponse, String> {
+    let selected_text = payload.selected_text.trim().to_string();
+    if selected_text.is_empty() {
+        return Err("选中文本不能为空".to_string());
+    }
+    let model_settings = {
+        let app_state = state.lock().map_err(|error| error.to_string())?;
+        app_state.config.model_settings.clone()
+    };
+
+    let request_id = payload.request_id.clone();
+    let response = stream_text_completion(
+        &model_settings,
+        &ModelRequest {
+            task_type: "reader.selection_paper_explain".to_string(),
+            provider: model_settings.provider.clone(),
+            model: model_settings.tool_model.clone(),
+            system_prompt: build_selection_explain_system_prompt(),
+            prompt: build_selection_explain_user_prompt(
+                payload.document_id.as_deref(),
+                &selected_text,
+            ),
+            output_format: "json".to_string(),
+            context_blocks: vec![selected_text.clone()],
+            metadata_json: json!({
+                "documentId": payload.document_id,
+                "source": "manual_selection"
+            })
+            .to_string(),
+            temperature: 0.2,
+            max_output_tokens: 1200,
+        },
+        |chunk| {
+            app.emit(
+                "reader-selection-explain-stream",
+                SelectionExplainStreamEventPayload {
+                    request_id: request_id.clone(),
+                    chunk: chunk.to_string(),
+                    done: false,
+                    error: None,
+                },
+            )
+            .map_err(|error| error.to_string())
+        },
+    )
+    .await;
+
+    let response = match response {
+        Ok(result) => {
+            app.emit(
+                "reader-selection-explain-stream",
+                SelectionExplainStreamEventPayload {
+                    request_id: request_id.clone(),
+                    chunk: String::new(),
+                    done: true,
+                    error: None,
+                },
+            )
+            .map_err(|error| error.to_string())?;
+            result
+        }
+        Err(error) => {
+            app.emit(
+                "reader-selection-explain-stream",
+                SelectionExplainStreamEventPayload {
+                    request_id,
+                    chunk: String::new(),
+                    done: true,
+                    error: Some(error.clone()),
+                },
+            )
+            .map_err(|emit_error| emit_error.to_string())?;
+            return Err(error);
+        }
+    };
+
+    let parsed = parse_selection_explain_json(&response.output_text);
+    Ok(ExplainSelectionTextCommandResponse {
+        summary: parsed
+            .string_field(&["summary", "学习要点", "what_is_this_block_about"])
+            .unwrap_or_else(|| "已基于你选择的原文完成学习解析。".to_string()),
+        plain_explanation: parsed
+            .string_field(&["plainExplanation", "plain_explanation", "直白解释"])
+            .unwrap_or_else(|| "当前选区解释已生成。".to_string()),
+        key_points: parsed.string_array_field(&[
+            "keyPoints",
+            "key_points",
+            "重点清单",
+            "最重要要点",
+        ]),
+        prerequisites: parsed.string_array_field(&["prerequisites", "前置知识"]),
+        pitfalls: parsed.string_array_field(&["pitfalls", "常见误区"]),
+        examples: parsed.string_array_field(&["examples", "理解例子"]),
+        terms: parsed.term_array_field(&["terms", "术语解释", "关键术语"]),
+        extension: parsed.string_array_field(&["extension", "继续拓展", "拓展"]),
+        confidence: parsed
+            .string_field(&["confidence"])
+            .unwrap_or_else(|| "medium".to_string()),
+        raw_json: response.output_text,
+        model: response.model,
+        provider: response.provider,
+    })
+}
+
 fn build_chat_system_prompt() -> String {
     [
         "你是 KnowledgeOS 的阅读解析助手。",
@@ -211,6 +362,137 @@ fn build_chat_system_prompt() -> String {
         "10. 当用户只是点击了知识块但没有具体问题，返回对该知识块的直接解析内容。"
     ]
     .join("\n")
+}
+
+fn build_selection_explain_system_prompt() -> String {
+    [
+        "你是 KnowledgeOS 的学习解析助手。",
+        "你会收到用户在 PDF 原文中手动框选的一段文本。",
+        "请仅基于该文本生成学习解析，不要编造不存在的信息。",
+        "必须输出 JSON 对象，不要输出 Markdown 代码块。",
+        "JSON 字段要求：",
+        "summary: string，简洁说明该段核心内容",
+        "plainExplanation: string，直白解释",
+        "keyPoints: string[]，最多 5 条",
+        "prerequisites: string[]，最多 4 条",
+        "pitfalls: string[]，最多 4 条",
+        "examples: string[]，最多 4 条",
+        "terms: { term: string, explanation: string }[]，最多 8 条",
+        "extension: string[]，最多 4 条",
+        "confidence: \"high\" | \"medium\" | \"low\"",
+    ]
+    .join("\n")
+}
+
+fn build_selection_explain_user_prompt(document_id: Option<&str>, selected_text: &str) -> String {
+    let doc = document_id.unwrap_or("unknown");
+    format!("文档ID：{doc}\n\n用户手动选中的原文如下：\n---\n{selected_text}\n---\n\n请返回 JSON。")
+}
+
+struct ParsedSelectionExplainJson {
+    value: Value,
+}
+
+impl ParsedSelectionExplainJson {
+    fn string_field(&self, keys: &[&str]) -> Option<String> {
+        for key in keys {
+            if let Some(value) = self.value.get(*key).and_then(|item| item.as_str()) {
+                let trimmed = value.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        None
+    }
+
+    fn string_array_field(&self, keys: &[&str]) -> Vec<String> {
+        for key in keys {
+            let items = self
+                .value
+                .get(*key)
+                .and_then(|item| item.as_array())
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(|item| item.as_str())
+                        .map(|item| item.trim().to_string())
+                        .filter(|item| !item.is_empty())
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if !items.is_empty() {
+                return items;
+            }
+        }
+        Vec::new()
+    }
+
+    fn term_array_field(&self, keys: &[&str]) -> Vec<SelectionExplainTerm> {
+        for key in keys {
+            let items = self
+                .value
+                .get(*key)
+                .and_then(|item| item.as_array())
+                .map(|array| {
+                    array
+                        .iter()
+                        .filter_map(|item| {
+                            if let Some(text) = item.as_str() {
+                                let normalized = text.trim();
+                                if normalized.is_empty() {
+                                    return None;
+                                }
+                                let mut parts = normalized.splitn(2, ['：', ':']);
+                                let term = parts.next().unwrap_or("").trim();
+                                let explanation = parts.next().unwrap_or("").trim();
+                                if term.is_empty() || explanation.is_empty() {
+                                    return None;
+                                }
+                                return Some(SelectionExplainTerm {
+                                    term: term.to_string(),
+                                    explanation: explanation.to_string(),
+                                });
+                            }
+                            let term = item.get("term").and_then(|value| value.as_str())?;
+                            let explanation =
+                                item.get("explanation").and_then(|value| value.as_str())?;
+                            let normalized_term = term.trim();
+                            let normalized_explanation = explanation.trim();
+                            if normalized_term.is_empty() || normalized_explanation.is_empty() {
+                                return None;
+                            }
+                            Some(SelectionExplainTerm {
+                                term: normalized_term.to_string(),
+                                explanation: normalized_explanation.to_string(),
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            if !items.is_empty() {
+                return items;
+            }
+        }
+        Vec::new()
+    }
+}
+
+fn parse_selection_explain_json(raw: &str) -> ParsedSelectionExplainJson {
+    if let Ok(value) = serde_json::from_str::<Value>(raw) {
+        return ParsedSelectionExplainJson { value };
+    }
+    let start = raw.find('{');
+    let end = raw.rfind('}');
+    if let (Some(start_index), Some(end_index)) = (start, end) {
+        if end_index > start_index {
+            let candidate = &raw[start_index..=end_index];
+            if let Ok(value) = serde_json::from_str::<Value>(candidate) {
+                return ParsedSelectionExplainJson { value };
+            }
+        }
+    }
+    ParsedSelectionExplainJson { value: json!({}) }
 }
 
 fn build_chat_user_prompt(

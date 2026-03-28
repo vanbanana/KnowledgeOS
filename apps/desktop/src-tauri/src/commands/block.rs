@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::services::block::{
-    BlockRecord, delete_block, insert_note_block, list_blocks, update_block_metadata,
+    BlockRecord, delete_block, get_block, insert_note_block, list_blocks, update_block_metadata,
 };
 use crate::state::AppState;
 
@@ -11,6 +11,12 @@ use crate::state::AppState;
 #[serde(rename_all = "camelCase")]
 pub struct ListBlocksPayload {
     pub document_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetBlockPayload {
+    pub block_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +58,12 @@ pub struct UpdateBlockCommandResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct GetBlockCommandResponse {
+    pub block: BlockRecord,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct InsertNoteBlockCommandResponse {
     pub block: BlockRecord,
 }
@@ -72,6 +84,18 @@ pub fn list_blocks_command(
     let blocks =
         list_blocks(&app_state.db, &payload.document_id).map_err(|error| error.to_string())?;
     Ok(ListBlocksCommandResponse { blocks })
+}
+
+#[tauri::command]
+pub fn get_block_command(
+    payload: GetBlockPayload,
+    state: tauri::State<'_, Arc<Mutex<AppState>>>,
+) -> Result<GetBlockCommandResponse, String> {
+    let app_state = state.lock().map_err(|error| error.to_string())?;
+    let block = get_block(&app_state.db, &payload.block_id)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| "Block 不存在".to_string())?;
+    Ok(GetBlockCommandResponse { block })
 }
 
 #[tauri::command]
